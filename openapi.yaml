@@ -1,0 +1,669 @@
+openapi: 3.0.3
+info:
+  title: Retro Video Game Exchange API
+  version: 1.0.0
+  description: |
+    A REST API that allows users to register and manage used retro video games they want to trade.
+
+    Notes about this specific implementation:
+    - Users are created via **POST /users**.
+    - Games are created via **POST /games** with an **ownerUserId**.
+    - Games can be searched by title via **GET /games?title=...**.
+    - Responses include HATEOAS links (Richardson Maturity Model Level 3).
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: Users
+  - name: Games
+
+paths:
+  /users:
+    post:
+      tags: [Users]
+      summary: Register a new user
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewUserRequest'
+            examples:
+              example:
+                value:
+                  username: francisco
+                  password: penguin123
+                  email: francisco@example.com
+                  streetAddress: 123 Penguin St
+      responses:
+        '201':
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /users/{userId}:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+        description: The user's ID
+    get:
+      tags: [Users]
+      summary: Get a user by ID
+      operationId: getUserById
+      responses:
+        '200':
+          description: User found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Bad request (invalid ID)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags: [Users]
+      summary: Replace editable user fields (username + street_address)
+      operationId: putUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPutRequest'
+            examples:
+              example:
+                value:
+                  username: newName
+                  street_address: 456 Iceberg Ave
+      responses:
+        '204':
+          description: Updated successfully (no content)
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      tags: [Users]
+      summary: Partially update a user (username and/or streetAddress)
+      operationId: patchUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPatchRequest'
+            examples:
+              changeUsername:
+                value:
+                  username: patchedName
+              changeAddress:
+                value:
+                  streetAddress: 789 Snow Rd
+      responses:
+        '204':
+          description: Updated successfully (no content)
+        '400':
+          description: Invalid input (or no fields provided)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [Users]
+      summary: Delete a user by ID
+      operationId: deleteUser
+      responses:
+        '204':
+          description: Deleted successfully (no content)
+        '400':
+          description: Bad request (invalid ID)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /games:
+    get:
+      tags: [Games]
+      summary: Search for a game by title
+      operationId: searchGamesByTitle
+      parameters:
+        - name: title
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: Game title to search for
+      responses:
+        '200':
+          description: Game found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameResponse'
+        '400':
+          description: Missing or invalid title
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Game not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags: [Games]
+      summary: Create a new game listing
+      operationId: createGame
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GameCreateRequest'
+            examples:
+              example:
+                value:
+                  ownerUserId: 1
+                  title: Halo 2
+                  publisher: Bungie
+                  description: Xbox
+                  year: 2004
+                  condition: good
+      responses:
+        '201':
+          description: Game created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /games/{gameId}:
+    parameters:
+      - name: gameId
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+        description: The game's ID
+    get:
+      tags: [Games]
+      summary: Get a game by ID
+      operationId: getGameById
+      responses:
+        '200':
+          description: Game found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameResponse'
+        '400':
+          description: Bad request (invalid ID)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Game not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags: [Games]
+      summary: Replace a game listing
+      operationId: putGame
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GamePutRequest'
+            examples:
+              example:
+                value:
+                  title: Halo 2
+                  publisher: Bungie
+                  description: Xbox
+                  year: 2004
+                  condition: mint
+      responses:
+        '204':
+          description: Updated successfully (no content)
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Game not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      tags: [Games]
+      summary: Partially update a game listing (title/condition/description)
+      operationId: patchGame
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GamePatchRequest'
+            examples:
+              changeTitle:
+                value:
+                  title: Halo 2 (Updated)
+              changeCondition:
+                value:
+                  condition: fair
+              changeDescription:
+                value:
+                  description: Xbox + Xbox 360
+      responses:
+        '204':
+          description: Updated successfully (no content)
+        '400':
+          description: Invalid input (or no fields provided)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Game not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [Games]
+      summary: Delete a game by ID
+      operationId: deleteGame
+      responses:
+        '204':
+          description: Deleted successfully (no content)
+        '400':
+          description: Bad request (invalid ID)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Game not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '405':
+          description: Method not allowed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: game not found in database
+        status:
+          type: integer
+          example: 404
+      required: [error, status]
+
+    Link:
+      type: object
+      properties:
+        href:
+          type: string
+          example: /games/1
+      required: [href]
+
+    UserLinks:
+      type: object
+      properties:
+        self:
+          $ref: '#/components/schemas/Link'
+        update:
+          $ref: '#/components/schemas/Link'
+        patch:
+          $ref: '#/components/schemas/Link'
+        delete:
+          $ref: '#/components/schemas/Link'
+      required: [self, update, patch, delete]
+
+    GameLinks:
+      type: object
+      properties:
+        self:
+          $ref: '#/components/schemas/Link'
+        update:
+          $ref: '#/components/schemas/Link'
+        patch:
+          $ref: '#/components/schemas/Link'
+        delete:
+          $ref: '#/components/schemas/Link'
+      required: [self, update, patch, delete]
+
+    NewUserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+          description: Plain-text password (stored as PasswordHash in the DB by this project)
+        email:
+          type: string
+          format: email
+          minLength: 1
+        streetAddress:
+          type: string
+          minLength: 1
+      required: [username, password, email, streetAddress]
+
+    UserPutRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+        street_address:
+          type: string
+          minLength: 1
+      required: [username, street_address]
+
+    UserPatchRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          nullable: true
+        streetAddress:
+          type: string
+          nullable: true
+      description: Send one or both fields.
+
+    UserResponse:
+      type: object
+      properties:
+        ID:
+          type: integer
+          example: 1
+        username:
+          type: string
+          example: francisco
+        email:
+          type: string
+          example: francisco@example.com
+        streetAddress:
+          type: string
+          example: 123 Penguin St
+        _links:
+          $ref: '#/components/schemas/UserLinks'
+      required: [ID, username, email, streetAddress, _links]
+
+    GameCreateRequest:
+      type: object
+      properties:
+        ownerUserId:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 1
+        publisher:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          minLength: 1
+          description: Used by this project to store the system(s) the game runs on.
+        year:
+          type: integer
+          minimum: 1
+        condition:
+          type: string
+          minLength: 1
+      required: [ownerUserId, title, publisher, description, year, condition]
+
+    GamePutRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+        publisher:
+          type: string
+          minLength: 1
+        description:
+          type: string
+          minLength: 1
+        year:
+          type: integer
+          minimum: 1
+        condition:
+          type: string
+          minLength: 1
+      required: [title, publisher, description, year, condition]
+
+    GamePatchRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          nullable: true
+        publisher:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        year:
+          type: integer
+          nullable: true
+        condition:
+          type: string
+          nullable: true
+      description: |
+        Send any subset of fields.
+
+        Note: Your server logic currently updates **title**, **condition**, and **description**.
+
+    GameResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        title:
+          type: string
+          example: Halo 2
+        publisher:
+          type: string
+          example: Bungie
+        description:
+          type: string
+          example: Xbox
+        year:
+          type: integer
+          example: 2004
+        condition:
+          type: string
+          example: good
+        _links:
+          $ref: '#/components/schemas/GameLinks'
+      required: [id, title, publisher, description, year, condition, _links]
