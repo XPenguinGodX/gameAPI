@@ -8,6 +8,9 @@ services:
       - "3306:3306"
     volumes:
       - dbdata:/var/lib/mysql
+    networks:
+      - distributed-network
+
 
   api:
     build:
@@ -16,13 +19,15 @@ services:
       SQL_ROOT: root
       SQL_PASSWORD: penguin
       SQL_PORT: 3306
-      DB_HOST: db
+      DB_HOST: gameapi-db-1
       DATABASE: RetroGameDatabase
       API_HOST: 8080
     depends_on:
       - db
     deploy:
       replicas: 3
+    networks:
+     - distributed-network
 
   nginx:
     image: nginx:alpine
@@ -32,6 +37,13 @@ services:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - api
+    networks:
+      - distributed-network
 
 volumes:
   dbdata:
+
+networks:
+  distributed-network:
+    name: distributed-network
+
