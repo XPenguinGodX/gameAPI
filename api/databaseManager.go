@@ -109,7 +109,6 @@ func GetGameBYName(GameTitle string) (Game, error) {
 	return game, nil
 
 }
-
 func GetGameBYID(GameId int) (Game, error) {
 	var game Game
 	query := ` SELECT GameID, Title, Publisher, Description, Year, Quality FROM GAMES WHERE GameID=?`
@@ -122,6 +121,44 @@ func GetGameBYID(GameId int) (Game, error) {
 		return Game{}, fmt.Errorf("error getting game: %w", err)
 	}
 	return game, nil
+}
+
+func GetOwnedGameBYID(GameId int) (OwnedGame, error) {
+	var game OwnedGame
+	query := ` SELECT GameID, Title, Publisher, Description, Year, Quality,OwnerUserID FROM GAMES WHERE GameID=?`
+
+	err := db.QueryRow(query, GameId).Scan(&game.ID, &game.Title, &game.Publisher, &game.Description, &game.Year, &game.Condition, &game.OwnerUserID)
+	if err == sql.ErrNoRows {
+		return OwnedGame{}, fmt.Errorf("game not found in database")
+	}
+	if err != nil {
+		return OwnedGame{}, fmt.Errorf("error getting game: %w", err)
+	}
+	return game, nil
+}
+
+func GetGamesNotOwnedByID(userID int) ([]Game, error) {
+	var games []Game
+	query := ` SELECT GameID, Title, Publisher, Description, Year, Quality FROM GAMES WHERE OwnerUserID <> ?`
+
+	rows, err := db.Query(query, userID)
+
+	if err != nil {
+		return nil, fmt.Errorf("error getting games: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var game Game
+		err := rows.Scan(&game.ID, &game.Title, &game.Publisher, &game.Description, &game.Year, &game.Condition)
+		if err != nil {
+			return nil, fmt.Errorf("error getting games info from scanned rows: %w", err)
+		}
+		games = append(games, game)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error getting games info from rows: %w", err)
+	}
+	return games, nil
 }
 
 func UpdateUsername(userId int, username string) error {
@@ -253,5 +290,188 @@ func DeleteGameByTitle(GameTitle string) error {
 	if rows == 0 {
 		return fmt.Errorf("game not found in database")
 	}
+	return nil
+}
+
+func CreateTradeOffer(offer TradeOffer) (int, error) {
+	query := `INSERT INTO TRADES(RequesterID, OwnerUserID,GameRequestedID,GameOfferedID,CurrentStatus) VALUES(?, ?, ?, ?, ?)`
+	result, err := db.Exec(query,
+		offer.RequesterID,
+		offer.OwnerUserID,
+		offer.GameRequestedID,
+		offer.GameOfferedID,
+		offer.CurrentStatus,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("error inserting trade offer: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("error getting trade offer: %w", err)
+	}
+	return int(id), nil
+}
+
+func GetTradeOfferByID(offerID int) (TradeOffer, error) {
+	var o TradeOffer
+	query := `
+		SELECT OfferID, RequesterID, OwnerUserID, GameRequestedID, GameOfferedID, CurrentStatus
+		FROM TRADE
+		WHERE OfferID = ?
+	`
+	err := db.QueryRow(query, offerID).Scan(
+		&o.OfferID,
+		&o.RequesterID,
+		&o.OwnerUserID,
+		&o.GameRequestedID,
+		&o.GameOfferedID,
+		&o.CurrentStatus,
+	)
+	if err == sql.ErrNoRows {
+		return TradeOffer{}, fmt.Errorf("trade offer not found in database")
+	}
+	if err != nil {
+		return TradeOffer{}, fmt.Errorf("error getting trade offer: %w", err)
+	}
+	return o, nil
+}
+
+func GetIncomingTradeOffers(ownerID int) ([]TradeOffer, error) {
+	offers := []TradeOffer{}
+	query := `
+		SELECT OfferID, RequesterID, OwnerUserID, GameRequestedID, GameOfferedID, CurrentStatus
+		FROM TRADE
+		WHERE OwnerUserID = ?
+		ORDER BY OfferID DESC
+	`
+	rows, err := db.Query(query, ownerID)
+	if err != nil {
+		return nil, fmt.Errorf("error querying trade offers: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var o TradeOffer
+		if err := rows.Scan(&o.OfferID, &o.RequesterID, &o.OwnerUserID, &o.GameRequestedID, &o.GameOfferedID, &o.CurrentStatus); err != nil {
+			return nil, fmt.Errorf("error scanning trade offer row: %w", err)
+		}
+		offers = append(offers, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating trade offers: %w", err)
+	}
+
+	return offers, nil
+}
+
+func GetOutgoingTradeOffers(requesterID int) ([]TradeOffer, error) {
+	offers := []TradeOffer{}
+	query := `
+		SELECT OfferID, RequesterID, OwnerUserID, GameRequestedID, GameOfferedID, CurrentStatus
+		FROM TRADE
+		WHERE RequesterID = ?
+		ORDER BY OfferID DESC
+	`
+	rows, err := db.Query(query, requesterID)
+	if err != nil {
+		return nil, fmt.Errorf("error querying trade offers: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var o TradeOffer
+		if err := rows.Scan(&o.OfferID, &o.RequesterID, &o.OwnerUserID, &o.GameRequestedID, &o.GameOfferedID, &o.CurrentStatus); err != nil {
+			return nil, fmt.Errorf("error scanning trade offer row: %w", err)
+		}
+		offers = append(offers, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating trade offers: %w", err)
+	}
+
+	return offers, nil
+}
+
+func UpdateTradeOfferStatus(offerID int, status string) error {
+	query := `UPDATE TRADE SET CurrentStatus=? WHERE OfferID=?`
+	result, err := db.Exec(query, status, offerID)
+	if err != nil {
+		return fmt.Errorf("error updating trade offer: %w", err)
+	}
+	aff, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("error checking rows affected: %w", err)
+	}
+	if aff == 0 {
+		return fmt.Errorf("trade offer not found in database")
+	}
+	return nil
+}
+
+func AcceptTradeOffer(offerID int) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("error starting transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var o TradeOffer
+	err = tx.QueryRow(`
+		SELECT OfferID, RequesterID, OwnerUserID, GameRequestedID, GameOfferedID, CurrentStatus
+		FROM TRADE
+		WHERE OfferID=?
+	`, offerID).Scan(&o.OfferID, &o.RequesterID, &o.OwnerUserID, &o.GameRequestedID, &o.GameOfferedID, &o.CurrentStatus)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("trade offer not found in database")
+	}
+	if err != nil {
+		return fmt.Errorf("error reading trade offer: %w", err)
+	}
+
+	if o.CurrentStatus != "pending" {
+		return fmt.Errorf("Offer is not pending")
+	}
+
+	var requestedOwner int
+	err = tx.QueryRow(`SELECT OwnerUserID FROM GAMES WHERE GameID=?`, o.GameRequestedID).Scan(&requestedOwner)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("game not found in database")
+	}
+	if err != nil {
+		return fmt.Errorf("error checking requested game owner: %w", err)
+	}
+	if requestedOwner != o.OwnerUserID {
+		return fmt.Errorf("Requested game owner changed")
+	}
+
+	var offeredOwner int
+	err = tx.QueryRow(`SELECT OwnerUserID FROM GAMES WHERE GameID=?`, o.GameOfferedID).Scan(&offeredOwner)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("game not found in database")
+	}
+	if err != nil {
+		return fmt.Errorf("error checking offered game owner: %w", err)
+	}
+	if offeredOwner != o.RequesterID {
+		return fmt.Errorf("Offered game owner changed")
+	}
+
+	// Swap owners
+	if _, err := tx.Exec(`UPDATE GAMES SET OwnerUserID=? WHERE GameID=?`, o.RequesterID, o.GameRequestedID); err != nil {
+		return fmt.Errorf("error updating requested game owner: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE GAMES SET OwnerUserID=? WHERE GameID=?`, o.OwnerUserID, o.GameOfferedID); err != nil {
+		return fmt.Errorf("error updating offered game owner: %w", err)
+	}
+
+	// Mark accepted
+	if _, err := tx.Exec(`UPDATE TRADE SET CurrentStatus='accepted' WHERE OfferID=?`, o.OfferID); err != nil {
+		return fmt.Errorf("error updating trade status: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("error committing transaction: %w", err)
+	}
+
 	return nil
 }

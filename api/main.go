@@ -19,10 +19,18 @@ type Game struct {
 
 type GamePatch struct {
 	Title       *string `json:"title"`
-	Publisher   *string `json:"publisher"`
 	Description *string `json:"description"`
-	Year        *int    `json:"year"`
 	Condition   *string `json:"condition"`
+}
+
+type OwnedGame struct {
+	OwnerUserID int    `json:"ownerUserId"`
+	ID          int    `json:"id"`
+	Title       string `json:"title"`
+	Publisher   string `json:"publisher"`
+	Description string `json:"description"`
+	Year        int    `json:"year"`
+	Condition   string `json:"condition"`
 }
 
 type GameCreateRequest struct {
@@ -51,7 +59,7 @@ type NewUserRequest struct {
 
 type UserPutRequest struct {
 	Username      string `json:"username"`
-	StreetAddress string `json:"street_address"`
+	StreetAddress string `json:"streetAddress"`
 }
 
 type GamePutRequest struct {
@@ -65,6 +73,26 @@ type GamePutRequest struct {
 type UserPatch struct {
 	Username      *string `json:"username"`
 	StreetAddress *string `json:"streetAddress"`
+}
+
+type TradeOffer struct {
+	OfferID         int    `json:"offerId"`
+	RequesterID     int    `json:"requesterId"`
+	OwnerUserID     int    `json:"ownerUserId"`
+	GameRequestedID int    `json:"gameRequestedId"`
+	GameOfferedID   int    `json:"gameOfferedId"`
+	CurrentStatus   string `json:"currentStatus"`
+}
+
+type TradeOfferCreateRequest struct {
+	RequesterID     int `json:"requesterId"`
+	GameRequestedID int `json:"gameRequestedId"`
+	GameOfferedID   int `json:"gameOfferedId"`
+}
+
+type TradeOfferPatch struct {
+	OwnerUserID   *int    `json:"ownerUserId"`
+	CurrentStatus *string `json:"currentStatus"`
 }
 
 type Link struct {
@@ -92,9 +120,210 @@ func main() {
 	http.HandleFunc("/games/", gameByIDHandler)
 	http.HandleFunc("/users", userPost)
 	http.HandleFunc("/users/", userByIDHandler)
+	http.HandleFunc("/offers", offersHandler)
+	http.HandleFunc("/offers/", offerByIDHandler)
 
 	fmt.Println("Listening on port 8080")
 	http.ListenAndServe(":8080", nil)
+}
+
+func offersHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		createOffer(w, r)
+	case http.MethodGet:
+		listOffers(w, r)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+func listOffers(w http.ResponseWriter, r *http.Request) {
+	userStr := r.URL.Query().Get("userId")
+	if userStr == "" {
+		writeError(w, http.StatusBadRequest, "userId is required")
+		return
+	}
+
+	userID, err := strconv.Atoi(userStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "userId is invalid must be a number")
+		return
+	}
+
+	kind := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
+	var offers []TradeOffer
+
+	if kind == "outgoing" {
+		offers, err = GetOutgoingTradeOffers(userID)
+	} else {
+		offers, err = GetIncomingTradeOffers(userID)
+	}
+
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	resp := make([]any, 0, len(offers))
+	for _, o := range offers {
+		resp = append(resp, tradeHATEOAS(o))
+	}
+	writeJSON(w, http.StatusOK, resp)
+
+}
+
+func offerByIDHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := parseOfferID(r.URL.Path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid Offer ID")
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		getOfferByID(w, r, id)
+	case http.MethodPatch:
+		patchoffer(w, r, id)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+	}
+}
+
+func getOfferByID(w http.ResponseWriter, r *http.Request, id int) {
+	offer, err := GetTradeOfferByID(id)
+	if err != nil {
+		if err.Error() == "trade offer not found in database" {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, tradeHATEOAS(offer))
+}
+
+func patchoffer(w http.ResponseWriter, r *http.Request, id int) {
+	var patch TradeOfferPatch
+	if err := readJSON(r, &patch); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if patch.OwnerUserID == nil || patch.CurrentStatus == nil {
+		writeError(w, http.StatusBadRequest, "ownerUserId and currentStatus are required")
+		return
+	}
+
+	newStatus := strings.ToLower(strings.TrimSpace(*patch.CurrentStatus))
+	if newStatus != "accepted" && newStatus != "rejected" && newStatus != "cancelled" {
+		writeError(w, http.StatusBadRequest, "Invalid status")
+		return
+	}
+
+	offer, err := GetTradeOfferByID(id)
+	if err != nil {
+		if err.Error() == "trade offer not found in database" {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if offer.CurrentStatus != "pending" {
+		writeError(w, http.StatusConflict, "Offer is not pending")
+		return
+	}
+
+	if *patch.OwnerUserID != offer.OwnerUserID {
+		writeError(w, http.StatusForbidden, "Only the owner can respond to this offer")
+		return
+	}
+
+	if newStatus == "accepted" {
+
+		if err := AcceptTradeOffer(id); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if err := UpdateTradeOfferStatus(id, newStatus); err != nil {
+		if err.Error() == "trade offer not found in database" {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func createOffer(w http.ResponseWriter, r *http.Request) {
+	var offer TradeOfferCreateRequest
+	if err := readJSON(r, &offer); err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid Offer Data"+err.Error())
+		return
+	}
+
+	if offer.RequesterID <= 0 || offer.GameRequestedID <= 0 || offer.GameOfferedID <= 0 {
+		writeError(w, http.StatusBadRequest, "MISSING IDS")
+		return
+	}
+	if offer.GameRequestedID == offer.GameOfferedID {
+		writeError(w, http.StatusBadRequest, "CANT TRADE THE SAME GAME")
+		return
+	}
+
+	requestedGame, err := GetOwnedGameBYID(offer.GameRequestedID)
+	if err != nil {
+		if err.Error() == "game not found in database" {
+			writeError(w, http.StatusNotFound, "Game not found in database")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	offeredGame, err := GetOwnedGameBYID(offer.GameOfferedID)
+	if err != nil {
+		if err.Error() == "game not found in database" {
+			writeError(w, http.StatusNotFound, "Game not found in database")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	if offeredGame.OwnerUserID != offer.RequesterID {
+		writeError(w, http.StatusBadRequest, "You can only offer your own games")
+		return
+	}
+
+	if requestedGame.OwnerUserID == offer.RequesterID {
+		writeError(w, http.StatusBadRequest, "This is your own game")
+		return
+	}
+
+	trade := TradeOffer{
+		RequesterID:     offer.RequesterID,
+		OwnerUserID:     requestedGame.OwnerUserID,
+		GameRequestedID: offer.GameRequestedID,
+		GameOfferedID:   offer.GameOfferedID,
+		CurrentStatus:   "pending",
+	}
+
+	tradeID, err := CreateTradeOffer(trade)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	trade.OfferID = tradeID
+	writeJSON(w, http.StatusCreated, tradeHATEOAS(trade))
+
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -112,7 +341,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 func userHATEOAS(userID int, username, email, streetAddress string) map[string]any {
 	return map[string]any{
-		"ID":            userID,
+		"id":            userID,
 		"username":      username,
 		"email":         email,
 		"streetAddress": streetAddress,
@@ -138,6 +367,22 @@ func gameHATEOAS(game Game) map[string]any {
 			"update": {Href: fmt.Sprintf("/games/%d", game.ID)},
 			"patch":  {Href: fmt.Sprintf("/games/%d", game.ID)},
 			"delete": {Href: fmt.Sprintf("/games/%d", game.ID)},
+		},
+	}
+}
+
+func tradeHATEOAS(o TradeOffer) map[string]any {
+	return map[string]any{
+		"offerId":         o.OfferID,
+		"requesterId":     o.RequesterID,
+		"ownerUserId":     o.OwnerUserID,
+		"gameRequestedId": o.GameRequestedID,
+		"gameOfferedId":   o.GameOfferedID,
+		"currentStatus":   o.CurrentStatus,
+		"_links": map[string]Link{
+			"self":   {Href: fmt.Sprintf("/offers/%d", o.OfferID)},
+			"update": {Href: fmt.Sprintf("/offers/%d", o.OfferID)},
+			"patch":  {Href: fmt.Sprintf("/offers/%d", o.OfferID)},
 		},
 	}
 }
@@ -278,23 +523,38 @@ func gameHandler(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodGet:
 		title := r.URL.Query().Get("title")
-		if title == "" {
-			writeError(w, http.StatusBadRequest, "HOW AM I TO SEARCH BY TITLE WITH NO TITLE")
-			return
-		}
+		excludeOwner := r.URL.Query().Get("excludeOwnerId")
 
-		game, err := GetGameBYName(title)
-		if err != nil {
-			if err.Error() == "game not found in database" {
-				writeError(w, http.StatusNotFound, err.Error())
+		if title != "" {
+			game, err := GetGameBYName(title)
+			if err != nil {
+				if err.Error() == "game not found in database" {
+					writeError(w, http.StatusNotFound, err.Error())
+					return
+				}
+				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeJSON(w, http.StatusOK, gameHATEOAS(game))
+			return
+		} else if excludeOwner != "" {
+			var id, err = strconv.Atoi(excludeOwner)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			var games []Game
+			games, err = GetGamesNotOwnedByID(id)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			writeJSON(w, http.StatusOK, games)
+			return
+		} else {
+			writeError(w, http.StatusBadRequest, "You gotta provide a title or id to exclude")
 			return
 		}
-
-		writeJSON(w, http.StatusOK, gameHATEOAS(game))
-		return
 
 	case http.MethodPost:
 		gamePost(w, r)
@@ -530,6 +790,12 @@ func parseGameID(path string) (int, error) {
 
 func parseUserID(path string) (int, error) {
 	raw := strings.TrimPrefix(path, "/users/")
+	raw = strings.Trim(raw, "/")
+	return strconv.Atoi(raw)
+}
+
+func parseOfferID(path string) (int, error) {
+	raw := strings.TrimPrefix(path, "/offers/")
 	raw = strings.Trim(raw, "/")
 	return strconv.Atoi(raw)
 }
