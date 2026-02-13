@@ -177,6 +177,7 @@ func offerByIDHandler(w http.ResponseWriter, r *http.Request) {
 	id, err := parseOfferID(r.URL.Path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid Offer ID")
+		return
 	}
 
 	switch r.Method {

@@ -12,6 +12,7 @@ services:
       - distributed-network
 
   api1:
+    container_name: api1
     build: { context: ./api }
     environment:
       SQL_ROOT: root
@@ -24,6 +25,7 @@ services:
     networks: [distributed-network]
 
   api2:
+    container_name: api2
     build: { context: ./api }
     environment:
       SQL_ROOT: root
@@ -36,6 +38,7 @@ services:
     networks: [distributed-network]
 
   api3:
+    container_name: api3
     build: { context: ./api }
     environment:
       SQL_ROOT: root

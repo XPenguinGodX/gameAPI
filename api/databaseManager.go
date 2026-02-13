@@ -14,7 +14,7 @@ var db *sql.DB
 
 func ConnectDatabase() error {
 	if err := godotenv.Load(); err != nil {
-		log.Println(".env file found")
+		log.Println(".env file not found")
 	}
 	dbHost := os.Getenv("DB_HOST")
 	if dbHost == "" {
@@ -294,7 +294,7 @@ func DeleteGameByTitle(GameTitle string) error {
 }
 
 func CreateTradeOffer(offer TradeOffer) (int, error) {
-	query := `INSERT INTO TRADES(RequesterID, OwnerUserID,GameRequestedID,GameOfferedID,CurrentStatus) VALUES(?, ?, ?, ?, ?)`
+	query := `INSERT INTO TRADE(RequesterID, OwnerUserID,GameRequestedID,GameOfferedID,CurrentStatus) VALUES(?, ?, ?, ?, ?)`
 	result, err := db.Exec(query,
 		offer.RequesterID,
 		offer.OwnerUserID,
