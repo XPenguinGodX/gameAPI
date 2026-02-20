@@ -12,67 +12,113 @@ services:
       - distributed-network
 
   api1:
+    restart: always
     container_name: api1
-    build: { context: ./api }
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     environment:
+      KAFKA_BROKER: broker:9092
+      KAFKA_TOPIC: notifications
       SQL_ROOT: root
       SQL_PASSWORD: penguin
       SQL_PORT: 3306
       DB_HOST: db
       DATABASE: RetroGameDatabase
       API_HOST: 8080
-    depends_on: [db]
-    networks: [distributed-network]
+    depends_on:
+      - db
+    networks:
+      - distributed-network
 
   api2:
+    restart: always
     container_name: api2
-    build: { context: ./api }
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     environment:
+      KAFKA_BROKER: broker:9092
+      KAFKA_TOPIC: notifications
       SQL_ROOT: root
       SQL_PASSWORD: penguin
       SQL_PORT: 3306
       DB_HOST: db
       DATABASE: RetroGameDatabase
       API_HOST: 8080
-    depends_on: [db]
-    networks: [distributed-network]
+    depends_on:
+      - db
+    networks:
+      - distributed-network
 
   api3:
+    restart: always
     container_name: api3
-    build: { context: ./api }
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     environment:
+      KAFKA_BROKER: broker:9092
+      KAFKA_TOPIC: notifications
       SQL_ROOT: root
       SQL_PASSWORD: penguin
       SQL_PORT: 3306
       DB_HOST: db
       DATABASE: RetroGameDatabase
       API_HOST: 8080
-    depends_on: [db]
-    networks: [distributed-network]
+    depends_on:
+      - db
+    networks:
+      - distributed-network
 
   nginx:
+    restart: always
     build: ./nginx
     ports:
       - "80:80"
-    depends_on: [api1, api2, api3]
-    networks: [distributed-network]
+    depends_on:
+      - api1
+      - api2
+      - api3
+    networks:
+      - distributed-network
 
   broker:
     image: apache/kafka:latest
     container_name: broker
+    networks:
+      - distributed-network
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://localhost:9092,CONTROLLER://localhost:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
+
+  email:
+    build: ./email
+    container_name: email
+    environment:
+      KAFKA_BROKER: broker:9092
+      KAFKA_TOPIC: notifications
+      KAFKA_GROUP: email
+
+      SMTP_HOST: smtp.ethereal.email
+      SMTP_PORT: 587
+      SMTP_USER: jaime.lindgren@ethereal.email
+      SMTP_PASS: 5ugRj4hkejafzrD3Cp
+      SMTP_FROM: jaime.lindgren@ethereal.email
+    depends_on:
+      - broker
+    networks:
+      - distributed-network
 
 volumes:
   dbdata:

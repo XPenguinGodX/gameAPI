@@ -408,6 +408,16 @@ func UpdateTradeOfferStatus(offerID int, status string) error {
 	return nil
 }
 
+func GetEmailWithID(id int) string {
+	var email string
+	query := `SELECT Email From USERS WHERE ID=?`
+	result := db.QueryRow(query, id).Scan(&email)
+	if result != nil {
+		return ""
+	}
+	return email
+}
+
 func AcceptTradeOffer(offerID int) error {
 	tx, err := db.Begin()
 	if err != nil {

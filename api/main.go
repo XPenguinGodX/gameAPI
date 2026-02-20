@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"gameAPI/kafka"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -100,6 +102,9 @@ type Link struct {
 }
 
 func main() {
+
+	kafka.StartupKafkaProducer()
+
 	if err := ConnectDatabase(); err != nil {
 		panic(err)
 	}
@@ -152,7 +157,12 @@ func listOffers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	kind := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
+	status := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
 	var offers []TradeOffer
+	if status != "" && status != "pending" && status != "accepted" && status != "rejected" && status != "cancelled" {
+		writeError(w, http.StatusBadRequest, "Invalid status")
+		return
+	}
 
 	if kind == "outgoing" {
 		offers, err = GetOutgoingTradeOffers(userID)
@@ -163,6 +173,16 @@ func listOffers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if status != "" {
+		filtered := make([]TradeOffer, 0, len(offers))
+		for _, o := range offers {
+			if strings.ToLower(o.CurrentStatus) == status {
+				filtered = append(filtered, o)
+			}
+		}
+		offers = filtered
 	}
 
 	resp := make([]any, 0, len(offers))
@@ -184,7 +204,7 @@ func offerByIDHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		getOfferByID(w, r, id)
 	case http.MethodPatch:
-		patchoffer(w, r, id)
+		patchOffer(w, r, id)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
@@ -203,7 +223,7 @@ func getOfferByID(w http.ResponseWriter, r *http.Request, id int) {
 	writeJSON(w, http.StatusOK, tradeHATEOAS(offer))
 }
 
-func patchoffer(w http.ResponseWriter, r *http.Request, id int) {
+func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 	var patch TradeOfferPatch
 	if err := readJSON(r, &patch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -242,11 +262,40 @@ func patchoffer(w http.ResponseWriter, r *http.Request, id int) {
 	}
 
 	if newStatus == "accepted" {
-
 		if err := AcceptTradeOffer(id); err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
+
+		ownerEmail := GetEmailWithID(offer.OwnerUserID)
+		requesterEmail := GetEmailWithID(offer.RequesterID)
+
+		if ownerEmail == "" {
+			log.Println("missing email for owner userID:", offer.OwnerUserID)
+		} else {
+			if err := kafka.PushNotification(kafka.Notification{
+				To:        ownerEmail,
+				Subject:   "Game Offer Accepted",
+				Body:      "Your game offer has been accepted.",
+				EventType: "offer_accepted",
+			}); err != nil {
+				log.Println("kafka push FAILED (owner accepted):", err)
+			}
+		}
+
+		if requesterEmail == "" {
+			log.Println("missing email for requester userID:", offer.RequesterID)
+		} else {
+			if err := kafka.PushNotification(kafka.Notification{
+				To:        requesterEmail,
+				Subject:   "Game Offer Accepted",
+				Body:      "Your game offer has been accepted.",
+				EventType: "offer_accepted",
+			}); err != nil {
+				log.Println("kafka push FAILED (requester accepted):", err)
+			}
+		}
+
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -258,6 +307,37 @@ func patchoffer(w http.ResponseWriter, r *http.Request, id int) {
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if newStatus == "rejected" {
+		ownerEmail := GetEmailWithID(offer.OwnerUserID)
+		requesterEmail := GetEmailWithID(offer.RequesterID)
+
+		if ownerEmail == "" {
+			log.Println("missing email for owner userID:", offer.OwnerUserID)
+		} else {
+			if err := kafka.PushNotification(kafka.Notification{
+				To:        ownerEmail,
+				Subject:   "Game Offer Rejected",
+				Body:      "A game offer was rejected.",
+				EventType: "offer_rejected",
+			}); err != nil {
+				log.Println("kafka push FAILED (owner rejected):", err)
+			}
+		}
+
+		if requesterEmail == "" {
+			log.Println("missing email for requester userID:", offer.RequesterID)
+		} else {
+			if err := kafka.PushNotification(kafka.Notification{
+				To:        requesterEmail,
+				Subject:   "Game Offer Rejected",
+				Body:      "Your game offer was rejected.",
+				EventType: "offer_rejected",
+			}); err != nil {
+				log.Println("kafka push FAILED (requester rejected):", err)
+			}
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -322,6 +402,38 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	gameOwnerEmail := GetEmailWithID(requestedGame.OwnerUserID)
+	requestMakerEmail := GetEmailWithID(offer.RequesterID)
+
+	if gameOwnerEmail == "" {
+		log.Println("missing email for game owner userID:", requestedGame.OwnerUserID)
+	} else {
+		err := kafka.PushNotification(kafka.Notification{
+			To:        gameOwnerEmail,
+			Subject:   "Game Offer Created",
+			Body:      "An offer has been made for your game",
+			EventType: "offer_created",
+		})
+		if err != nil {
+			log.Println("kafka push FAILED (owner):", err)
+		}
+	}
+
+	if requestMakerEmail == "" {
+		log.Println("missing email for requester userID:", offer.RequesterID)
+	} else {
+		err := kafka.PushNotification(kafka.Notification{
+			To:        requestMakerEmail,
+			Subject:   "Game Offer Created",
+			Body:      "You have made a game offer",
+			EventType: "offer_created",
+		})
+		if err != nil {
+			log.Println("kafka push FAILED (requester):", err)
+		}
+	}
+
 	trade.OfferID = tradeID
 	writeJSON(w, http.StatusCreated, tradeHATEOAS(trade))
 
