@@ -18,24 +18,21 @@ type Notification struct {
 }
 
 var notificationWriter *kafkago.Writer
-var notificationTopic string
 
 func StartupKafkaProducer() {
 	broker := os.Getenv("KAFKA_BROKER")
-	notificationTopic := os.Getenv("KAFKA_TOPIC")
-	if broker == "" || notificationTopic == "" {
-		log.Println("MISSING KAFKA_BROKER OR KAFKA_TOPIC")
+	if broker == "" {
+		log.Println("MISSING KAFKA_BROKER")
 		return
 	}
 
 	notificationWriter = &kafkago.Writer{
 		Addr:         kafkago.TCP(broker),
-		Topic:        notificationTopic,
 		Balancer:     &kafkago.LeastBytes{},
 		RequiredAcks: kafkago.RequireOne,
 	}
 
-	log.Println("Connected to Kafka!:", broker, "topic:", notificationTopic)
+	log.Println("Connected to Kafka!:", broker)
 }
 
 func PushNotification(message Notification) error {
@@ -48,10 +45,14 @@ func PushNotification(message Notification) error {
 		return err
 	}
 
-	context, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	topic := message.EventType
+
+	cxt, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	return notificationWriter.WriteMessages(context, kafkago.Message{
+	return notificationWriter.WriteMessages(cxt, kafkago.Message{
+		Topic: topic,
 		Value: data,
 	})
+
 }

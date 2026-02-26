@@ -50,7 +50,6 @@ func sendSMTP(n Notification) error {
 	}
 	defer c.Quit()
 
-	// STARTTLS
 	if ok, _ := c.Extension("STARTTLS"); ok {
 		if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
 			return err
@@ -88,22 +87,21 @@ func sendSMTP(n Notification) error {
 
 func main() {
 	broker := mustEnv("KAFKA_BROKER")
-	topic := mustEnv("KAFKA_TOPIC")
 	group := os.Getenv("KAFKA_GROUP")
 	if group == "" {
 		group = "email-service"
 	}
 
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  []string{broker},
-		Topic:    topic,
-		GroupID:  group,
-		MinBytes: 1e3,
-		MaxBytes: 10e6,
+		Brokers:     []string{broker},
+		GroupTopics: []string{"offers", "users"},
+		GroupID:     group,
+		MinBytes:    1e3,
+		MaxBytes:    10e6,
 	})
 	defer r.Close()
 
-	log.Println("email-service consuming:", topic, "from:", broker)
+	log.Println("email-service consuming:", "offers", "from:", broker)
 
 	for {
 		m, err := r.ReadMessage(context.Background())
@@ -130,4 +128,5 @@ func main() {
 
 		log.Println("email sent:", n.To, "event:", n.EventType)
 	}
+
 }

@@ -75,6 +75,7 @@ type GamePutRequest struct {
 type UserPatch struct {
 	Username      *string `json:"username"`
 	StreetAddress *string `json:"streetAddress"`
+	Password      *string `json:"password"`
 }
 
 type TradeOffer struct {
@@ -277,7 +278,7 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 				To:        ownerEmail,
 				Subject:   "Game Offer Accepted",
 				Body:      "Your game offer has been accepted.",
-				EventType: "offer_accepted",
+				EventType: "offers",
 			}); err != nil {
 				log.Println("kafka push FAILED (owner accepted):", err)
 			}
@@ -290,7 +291,7 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 				To:        requesterEmail,
 				Subject:   "Game Offer Accepted",
 				Body:      "Your game offer has been accepted.",
-				EventType: "offer_accepted",
+				EventType: "offers",
 			}); err != nil {
 				log.Println("kafka push FAILED (requester accepted):", err)
 			}
@@ -320,7 +321,7 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 				To:        ownerEmail,
 				Subject:   "Game Offer Rejected",
 				Body:      "A game offer was rejected.",
-				EventType: "offer_rejected",
+				EventType: "offers",
 			}); err != nil {
 				log.Println("kafka push FAILED (owner rejected):", err)
 			}
@@ -333,7 +334,7 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 				To:        requesterEmail,
 				Subject:   "Game Offer Rejected",
 				Body:      "Your game offer was rejected.",
-				EventType: "offer_rejected",
+				EventType: "offers",
 			}); err != nil {
 				log.Println("kafka push FAILED (requester rejected):", err)
 			}
@@ -413,7 +414,7 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 			To:        gameOwnerEmail,
 			Subject:   "Game Offer Created",
 			Body:      "An offer has been made for your game",
-			EventType: "offer_created",
+			EventType: "offers",
 		})
 		if err != nil {
 			log.Println("kafka push FAILED (owner):", err)
@@ -427,7 +428,7 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 			To:        requestMakerEmail,
 			Subject:   "Game Offer Created",
 			Body:      "You have made a game offer",
-			EventType: "offer_created",
+			EventType: "offers",
 		})
 		if err != nil {
 			log.Println("kafka push FAILED (requester):", err)
@@ -822,7 +823,36 @@ func userPatch(w http.ResponseWriter, r *http.Request, id int) {
 		}
 	}
 
-	if Patch.Username == nil && Patch.StreetAddress == nil {
+	if Patch.Password != nil {
+		if *Patch.Password == "" {
+			writeError(w, http.StatusBadRequest, "Cant change to a password that hasnt been provided dude")
+			return
+		}
+		if err := UpdateUserPassword(id, *Patch.Password); err != nil {
+			if err.Error() == "user not found in database (passwordCheck)" {
+				writeError(w, http.StatusNotFound, err.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		var userEmail = GetEmailWithID(id)
+		if userEmail == "" {
+			log.Println("user email not found in database")
+		} else {
+			err := kafka.PushNotification(kafka.Notification{
+				To:        userEmail,
+				Subject:   "Password Changed",
+				Body:      "You have changed your password (if this wasnt you we have a problem)",
+				EventType: "users",
+			})
+			if err != nil {
+				log.Println("kafka push FAILED:", err)
+			}
+		}
+	}
+
+	if Patch.Username == nil && Patch.StreetAddress == nil && Patch.Password == nil {
 		writeError(w, http.StatusBadRequest, "no fields provided *eye roll*")
 		return
 	}

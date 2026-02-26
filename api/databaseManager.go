@@ -408,9 +408,25 @@ func UpdateTradeOfferStatus(offerID int, status string) error {
 	return nil
 }
 
+func UpdateUserPassword(userID int, password string) error {
+	query := `UPDATE USERS SET PasswordHash=? WHERE UserID=?`
+	result, err := db.Exec(query, password, userID)
+	if err != nil {
+		return fmt.Errorf("error updating user password: %w", err)
+	}
+	aff, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("error checking rows affected: %w", err)
+	}
+	if aff == 0 {
+		return fmt.Errorf("user not found in database(DBPasswordUpdate)")
+	}
+	return nil
+}
+
 func GetEmailWithID(id int) string {
 	var email string
-	query := `SELECT Email From USERS WHERE ID=?`
+	query := `SELECT Email From USERS WHERE UserID=?`
 	result := db.QueryRow(query, id).Scan(&email)
 	if result != nil {
 		return ""

@@ -107,7 +107,7 @@ services:
     container_name: email
     environment:
       KAFKA_BROKER: broker:9092
-      KAFKA_TOPIC: notifications
+      KAFKA_TOPIC: users,offers
       KAFKA_GROUP: email
 
       SMTP_HOST: smtp.ethereal.email
@@ -120,11 +120,27 @@ services:
     networks:
       - distributed-network
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    networks:
+      - distributed-network
+
 volumes:
   dbdata:
+  prometheus_data:
+
 
 networks:
   distributed-network:
     name: distributed-network
+
 
 
