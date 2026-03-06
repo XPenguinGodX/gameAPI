@@ -2,21 +2,56 @@ global:
   scrape_interval: 10s
 
 scrape_configs:
+  - job_name: "nginx-exporter"
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - nginx-exporter:9113
+
   - job_name: "prometheus"
     static_configs:
-      - targets: ["prometheus:9090"]
+      - targets:
+          - prometheus:9090
 
   - job_name: "api1"
     metrics_path: /metrics
+    scrape_interval: 15s
     static_configs:
-      - targets: ["api1:8080"]
+      - targets:
+          - api1:8080
 
   - job_name: "api2"
     metrics_path: /metrics
+    scrape_interval: 15s
     static_configs:
-      - targets: ["api2:8080"]
+      - targets:
+          - api2:8080
 
   - job_name: "api3"
     metrics_path: /metrics
+    scrape_interval: 15s
     static_configs:
-      - targets: ["api3:8080"]
+      - targets:
+          - api3:8080
+
+  - job_name: "mysql_exporter"
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - mysqlExporter:9104
+
+  - job_name: "kafkaExporter"
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - kafkaExporter:9308
+
+  - job_name: "email"
+    metrics_path: /metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - email:2112

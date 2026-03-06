@@ -8,7 +8,22 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
+
+type postCount struct {
+	PostRequests *prometheus.CounterVec
+}
+
+type getCount struct {
+	GetRequests *prometheus.CounterVec
+}
+
+type NotFoundCount struct {
+	error404 *prometheus.CounterVec
+}
 
 type Game struct {
 	Title       string `json:"title"`
@@ -102,10 +117,31 @@ type Link struct {
 	Href string `json:"href"`
 }
 
+var register = prometheus.NewRegistry()
+var er = Error404(register)
+var gr = getRequests(register)
+
+func setStartingMetrics() {
+	er.error404.With(prometheus.Labels{"where": "GET offers by id, ID NOT FOUND"}).Add(0)
+	gr.GetRequests.With(prometheus.Labels{"where": "GET offer by id"}).Add(0)
+	gr.GetRequests.With(prometheus.Labels{"where": "GET offers user has"}).Add(0)
+	gr.GetRequests.With(prometheus.Labels{"where": "GET Games owner doesnt own"}).Add(0)
+	gr.GetRequests.With(prometheus.Labels{"where": "Get game by id"}).Add(0)
+	er.error404.With(prometheus.Labels{"where": "patch offers by id ID NOT FOUND"}).Add(0)
+	er.error404.With(prometheus.Labels{"where": "update trade status offers by id"}).Add(0)
+	er.error404.With(prometheus.Labels{"where": "GetOwnedGameByID GAMErequest NOT FOUND"}).Add(0)
+	er.error404.With(prometheus.Labels{"where": "userGetByID USER NOT FOUND"}).Add(0)
+	er.error404.With(prometheus.Labels{"where": "Delete Game, GAME NOT FOUND"}).Add(0)
+	er.error404.With(prometheus.Labels{"where": "userDelete, USER NOT FOUND"}).Add(0)
+	er.error404.With(prometheus.Labels{"where": "userPatch, USER NOT FOUND"}).Add(0)
+	er.error404.With(prometheus.Labels{"where": "Get Game by name NOT FOUND"}).Add(0)
+	gr.GetRequests.With(prometheus.Labels{"where": "Get user by id"}).Add(0)
+
+}
+
 func main() {
-
 	kafka.StartupKafkaProducer()
-
+	setStartingMetrics()
 	if err := ConnectDatabase(); err != nil {
 		panic(err)
 	}
@@ -117,20 +153,26 @@ func main() {
 	}
 
 	fmt.Println("DB test result:", one)
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "Server is running")
 	})
 
-	http.HandleFunc("/games", gameHandler)
-	http.HandleFunc("/games/", gameByIDHandler)
-	http.HandleFunc("/users", userPost)
-	http.HandleFunc("/users/", userByIDHandler)
-	http.HandleFunc("/offers", offersHandler)
-	http.HandleFunc("/offers/", offerByIDHandler)
+	mux.HandleFunc("/games", gameHandler)
+	mux.HandleFunc("/games/", gameByIDHandler)
+	mux.HandleFunc("/users", userPost)
+	mux.HandleFunc("/users/", userByIDHandler)
+	mux.HandleFunc("/offers", offersHandler)
+	mux.HandleFunc("/offers/", offerByIDHandler)
+
+	mux.Handle("/metrics", promhttp.HandlerFor(register, promhttp.HandlerOpts{
+		Registry: register,
+	}))
 
 	fmt.Println("Listening on port 8080")
-	http.ListenAndServe(":8080", nil)
+
+	http.ListenAndServe(":8080", mux)
+
 }
 
 func offersHandler(w http.ResponseWriter, r *http.Request) {
@@ -191,7 +233,7 @@ func listOffers(w http.ResponseWriter, r *http.Request) {
 		resp = append(resp, tradeHATEOAS(o))
 	}
 	writeJSON(w, http.StatusOK, resp)
-
+	gr.GetRequests.With(prometheus.Labels{"where": "GET offers user has"})
 }
 
 func offerByIDHandler(w http.ResponseWriter, r *http.Request) {
@@ -216,12 +258,14 @@ func getOfferByID(w http.ResponseWriter, r *http.Request, id int) {
 	if err != nil {
 		if err.Error() == "trade offer not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
+			er.error404.With(prometheus.Labels{"where": "GET offers by id, ID NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, tradeHATEOAS(offer))
+	gr.GetRequests.With(prometheus.Labels{"where": "GET offer by id"}).Inc()
 }
 
 func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
@@ -246,6 +290,7 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 	if err != nil {
 		if err.Error() == "trade offer not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
+			er.error404.With(prometheus.Labels{"where": "patch offers by id ID NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -304,6 +349,7 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 	if err := UpdateTradeOfferStatus(id, newStatus); err != nil {
 		if err.Error() == "trade offer not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
+			er.error404.With(prometheus.Labels{"where": "update trade status offers by id"})
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -364,6 +410,7 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, "Game not found in database")
+			er.error404.With(prometheus.Labels{"where": "GetOwnedGameByID GAMErequest NOT FOUND"})
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -374,6 +421,8 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, "Game not found in database")
+			er.error404.With(prometheus.Labels{"where": "GetOwnedGameByID GAMEoffered NOT FOUND"})
+
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -437,6 +486,8 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 
 	trade.OfferID = tradeID
 	writeJSON(w, http.StatusCreated, tradeHATEOAS(trade))
+	pc := postRequests(register)
+	pc.PostRequests.With(prometheus.Labels{"where": "Create Offer"}).Inc()
 
 }
 
@@ -542,6 +593,8 @@ func gamePost(w http.ResponseWriter, r *http.Request) {
 
 	game.ID = newGameID
 	writeJSON(w, http.StatusCreated, gameHATEOAS(game))
+	gp := postRequests(register)
+	gp.PostRequests.With(prometheus.Labels{"where": "Create game"}).Inc()
 }
 
 func userPost(w http.ResponseWriter, r *http.Request) {
@@ -579,6 +632,8 @@ func userPost(w http.ResponseWriter, r *http.Request) {
 	response := userHATEOAS(newUserId, userRequest.Username, userRequest.Email, userRequest.StreetAddress)
 
 	writeJSON(w, http.StatusCreated, response)
+	up := postRequests(register)
+	up.PostRequests.With(prometheus.Labels{"where": "Create user"}).Inc()
 }
 
 func userGetByID(w http.ResponseWriter, r *http.Request, id int) {
@@ -586,6 +641,7 @@ func userGetByID(w http.ResponseWriter, r *http.Request, id int) {
 	if err != nil {
 		if err.Error() == "user not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
+			er.error404.With(prometheus.Labels{"where": "userGetByID USER NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -595,6 +651,7 @@ func userGetByID(w http.ResponseWriter, r *http.Request, id int) {
 	response := userHATEOAS(id, user.Username, user.Email, user.StreetAddress)
 
 	writeJSON(w, http.StatusOK, response)
+	gr.GetRequests.With(prometheus.Labels{"where": "Get user by id"}).Inc()
 }
 
 func gameGetByID(w http.ResponseWriter, r *http.Request, id int) {
@@ -602,12 +659,14 @@ func gameGetByID(w http.ResponseWriter, r *http.Request, id int) {
 	if err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
+			gg := Error404(register)
+			gg.error404.With(prometheus.Labels{"where": "Get Game by id NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
+	gr.GetRequests.With(prometheus.Labels{"where": "Get game by id"}).Inc()
 	writeJSON(w, http.StatusOK, gameHATEOAS(game))
 }
 
@@ -644,6 +703,7 @@ func gameHandler(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				if err.Error() == "game not found in database" {
 					writeError(w, http.StatusNotFound, err.Error())
+					er.error404.With(prometheus.Labels{"where": "Get Game by name NOT FOUND"}).Inc()
 					return
 				}
 				writeError(w, http.StatusInternalServerError, err.Error())
@@ -664,6 +724,8 @@ func gameHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			writeJSON(w, http.StatusOK, games)
+
+			gr.GetRequests.With(prometheus.Labels{"where ": "GET Games owner doesnt own"}).Inc()
 			return
 		} else {
 			writeError(w, http.StatusBadRequest, "You gotta provide a title or id to exclude")
@@ -716,6 +778,8 @@ func gamePut(w http.ResponseWriter, r *http.Request, id int) {
 	if err := UpdateFullGame(id, game); err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
+			ufg := Error404(register)
+			ufg.error404.With(prometheus.Labels{"where": "Put Update full game, GAME NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -740,6 +804,8 @@ func userPut(w http.ResponseWriter, r *http.Request, id int) {
 	if err := UpdateUsername(id, user.Username); err != nil {
 		if err.Error() == "user not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
+			uu := Error404(register)
+			uu.error404.With(prometheus.Labels{"where": "Put Update user,USERNAME NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -749,6 +815,8 @@ func userPut(w http.ResponseWriter, r *http.Request, id int) {
 	if err := UpdateStreetAddress(id, user.StreetAddress); err != nil {
 		if err.Error() == "user not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
+			usa := Error404(register)
+			usa.error404.With(prometheus.Labels{"where": "put update street address, ADDRESS NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -763,6 +831,7 @@ func userDelete(w http.ResponseWriter, r *http.Request, id int) {
 	if err != nil {
 		if err.Error() == "user not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
+			er.error404.With(prometheus.Labels{"where": "userDelete, USER NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -777,6 +846,7 @@ func gameDelete(w http.ResponseWriter, r *http.Request, id int) {
 	if err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
+			er.error404.With(prometheus.Labels{"where": "Delete Game, GAME NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -801,6 +871,7 @@ func userPatch(w http.ResponseWriter, r *http.Request, id int) {
 		if err := UpdateUsername(id, *Patch.Username); err != nil {
 			if err.Error() == "user not found in database" {
 				writeError(w, http.StatusNotFound, err.Error())
+				er.error404.With(prometheus.Labels{"where": "userPatch, USER NOT FOUND"}).Inc()
 				return
 			}
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -816,6 +887,7 @@ func userPatch(w http.ResponseWriter, r *http.Request, id int) {
 		if err := UpdateStreetAddress(id, *Patch.StreetAddress); err != nil {
 			if err.Error() == "user not found in database" {
 				writeError(w, http.StatusNotFound, err.Error())
+				er.error404.With(prometheus.Labels{"where": "userPatch, USER NOT FOUND"}).Inc()
 				return
 			}
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -831,6 +903,8 @@ func userPatch(w http.ResponseWriter, r *http.Request, id int) {
 		if err := UpdateUserPassword(id, *Patch.Password); err != nil {
 			if err.Error() == "user not found in database (passwordCheck)" {
 				writeError(w, http.StatusNotFound, err.Error())
+				uu := Error404(register)
+				uu.error404.With(prometheus.Labels{"where": "userPatch, USER NOT FOUND"})
 				return
 			}
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -877,6 +951,8 @@ func gamePatch(w http.ResponseWriter, r *http.Request, id int) {
 		if err := UpdateGameTitle(id, *Patch.Title); err != nil {
 			if err.Error() == "game not found in database" {
 				writeError(w, http.StatusNotFound, err.Error())
+				uu := Error404(register)
+				uu.error404.With(prometheus.Labels{"where": "gamePatch, GAME NOT FOUND"})
 				return
 			}
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -893,6 +969,8 @@ func gamePatch(w http.ResponseWriter, r *http.Request, id int) {
 		if err := UpdateGameCondition(id, *Patch.Condition); err != nil {
 			if err.Error() == "game not found in database" {
 				writeError(w, http.StatusNotFound, err.Error())
+				ugp := Error404(register)
+				ugp.error404.With(prometheus.Labels{"where": "gamePatch condition, GAME NOT FOUND"})
 				return
 			}
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -909,6 +987,8 @@ func gamePatch(w http.ResponseWriter, r *http.Request, id int) {
 		if err := UpdateGameDescription(id, *Patch.Description); err != nil {
 			if err.Error() == "game not found in database" {
 				writeError(w, http.StatusNotFound, err.Error())
+				ugd := Error404(register)
+				ugd.error404.With(prometheus.Labels{"where": "gamePatch description, GAME NOT FOUND"})
 				return
 			}
 			writeError(w, http.StatusInternalServerError, err.Error())
@@ -941,4 +1021,45 @@ func parseOfferID(path string) (int, error) {
 	raw := strings.TrimPrefix(path, "/offers/")
 	raw = strings.Trim(raw, "/")
 	return strconv.Atoi(raw)
+}
+
+func postRequests(register prometheus.Registerer) *postCount {
+	pc := &postCount{
+		prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "total_of_post_requests",
+				Help: "This keeps track of the different post request that are made",
+			},
+			[]string{"where"},
+		),
+	}
+	register.MustRegister(pc.PostRequests)
+	return pc
+}
+
+func getRequests(register prometheus.Registerer) *getCount {
+	gc := &getCount{
+		prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "total_of_get_requests",
+				Help: "Tracking GET requests and where they are made",
+			},
+			[]string{"where"},
+		),
+	}
+	register.MustRegister(gc.GetRequests)
+	return gc
+}
+
+func Error404(register prometheus.Registerer) *NotFoundCount {
+	ntc := &NotFoundCount{
+		prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "total_of_404_errors",
+			Help: "Tracks count of 404 errors and where its happening",
+		},
+			[]string{"where"},
+		),
+	}
+	register.MustRegister(ntc.error404)
+	return ntc
 }

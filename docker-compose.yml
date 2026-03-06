@@ -1,6 +1,7 @@
 services:
   db:
     image: mysql:8.0
+    container_name: db
     environment:
       MYSQL_ROOT_PASSWORD: penguin
       MYSQL_DATABASE: RetroGameDatabase
@@ -73,6 +74,7 @@ services:
 
   nginx:
     restart: always
+    container_name: nginx
     build: ./nginx
     ports:
       - "80:80"
@@ -80,6 +82,20 @@ services:
       - api1
       - api2
       - api3
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - distributed-network
+
+  nginx-exporter:
+    image: nginx/nginx-prometheus-exporter:latest
+    container_name: nginx-exporter
+    ports:
+      - "9113:9113"
+    command:
+      - "--nginx.scrape-uri=http://nginx:80/stub_status"
+    depends_on:
+      - nginx
     networks:
       - distributed-network
 
@@ -101,6 +117,8 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
+    ports:
+      - "9092:9092"
 
   email:
     build: ./email
@@ -115,6 +133,8 @@ services:
       SMTP_USER: jaime.lindgren@ethereal.email
       SMTP_PASS: 5ugRj4hkejafzrD3Cp
       SMTP_FROM: jaime.lindgren@ethereal.email
+    ports:
+      - "2112:2112"
     depends_on:
       - broker
     networks:
@@ -130,12 +150,56 @@ services:
       - prometheus_data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
+    depends_on:
+      - nginx-exporter
+      - mysqlExporter
+      - kafkaExporter
     networks:
       - distributed-network
+
+
+  mysqlExporter:
+    image: prom/mysqld-exporter:latest
+    container_name: mysql_exporter
+    command:
+      - --mysqld.address=db:3306
+      - --mysqld.username=exporter
+    environment:
+      MYSQLD_EXPORTER_PASSWORD: penguin
+    ports:
+      - "9104:9104"
+    depends_on:
+      - db
+    networks:
+      - distributed-network
+
+  kafkaExporter:
+    container_name: kafkaExporter
+    image: danielqsj/kafka-exporter:latest
+    command:
+      - --kafka.server=broker:9092
+    ports:
+      - "9308:9308"
+    depends_on:
+      - broker
+    networks:
+      - distributed-network
+    restart: always
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana-enterprise:latest
+    ports:
+      - "3000:3000"
+    networks:
+      - distributed-network
+    volumes:
+      - grafana-storage:/var/lib/grafana
 
 volumes:
   dbdata:
   prometheus_data:
+  grafana-storage:
 
 
 networks:

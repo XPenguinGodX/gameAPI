@@ -7,12 +7,27 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"net/smtp"
 	"os"
 	"time"
 
+	ProMetrics "github.com/prometheus/client_golang/prometheus"
+	PromHttp "github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/segmentio/kafka-go"
 )
+
+type emailsFailed struct {
+	FailedEmails *ProMetrics.CounterVec
+}
+
+type emailsSuccessful struct {
+	SuccessfulEmails *ProMetrics.CounterVec
+}
+
+type totalEmails struct {
+	TotalEmails ProMetrics.Counter
+}
 
 type Notification struct {
 	To        string `json:"to"`
@@ -56,7 +71,6 @@ func sendSMTP(n Notification) error {
 		}
 	}
 
-	// AUTH
 	if ok, _ := c.Extension("AUTH"); ok {
 		if err := c.Auth(smtp.PlainAuth("", user, pass, host)); err != nil {
 			return err
@@ -85,7 +99,63 @@ func sendSMTP(n Notification) error {
 	return err
 }
 
+func failedMail(register ProMetrics.Registerer) *emailsFailed {
+	ef := &emailsFailed{
+		FailedEmails: ProMetrics.NewCounterVec(
+			ProMetrics.CounterOpts{
+				Name: "total_failed_emails",
+				Help: "This is the number of emails that failed",
+			},
+			[]string{"subject", "type"},
+		),
+	}
+	register.MustRegister(ef.FailedEmails)
+	return ef
+}
+
+func successfulMail(register ProMetrics.Registerer) *emailsSuccessful {
+	es := &emailsSuccessful{
+		SuccessfulEmails: ProMetrics.NewCounterVec(
+			ProMetrics.CounterOpts{
+				Name: "total_successful_emails",
+				Help: "The Number of successful emails",
+			},
+			[]string{"subject", "type"},
+		),
+	}
+	register.MustRegister(es.SuccessfulEmails)
+	return es
+}
+
+func totalMail(register ProMetrics.Registerer) *totalEmails {
+	te := &totalEmails{
+		TotalEmails: ProMetrics.NewCounter(ProMetrics.CounterOpts{
+			Name: "total_emails",
+			Help: "The number of total emails",
+		}),
+	}
+	register.MustRegister(te.TotalEmails)
+	return te
+}
+
+var register = ProMetrics.NewRegistry()
+var ef = failedMail(register)
+var es = successfulMail(register)
+var et = totalMail(register)
+
+func setStartingValues() {
+	ef.FailedEmails.With(ProMetrics.Labels{"subject": "Game Offer Created", "type": "offers"}).Add(0)
+	es.SuccessfulEmails.With(ProMetrics.Labels{"subject": "Game Offer Created", "type": "offers"}).Add(0)
+	ef.FailedEmails.With(ProMetrics.Labels{"subject": "Password Changed", "type": "users"}).Add(0)
+	es.SuccessfulEmails.With(ProMetrics.Labels{"subject": "Password Changed", "type": "users"}).Add(0)
+	ef.FailedEmails.With(ProMetrics.Labels{"subject": "Game Offer Rejected", "type": "offers"}).Add(0)
+	es.SuccessfulEmails.With(ProMetrics.Labels{"subject": "Game Offer Rejected", "type": "offers"}).Add(0)
+	ef.FailedEmails.With(ProMetrics.Labels{"subject": "Game Offer Accepted", "type": "offers"}).Add(0)
+	es.SuccessfulEmails.With(ProMetrics.Labels{"subject": "Game Offer Accepted", "type": "offers"}).Add(0)
+}
+
 func main() {
+	setStartingValues()
 	broker := mustEnv("KAFKA_BROKER")
 	group := os.Getenv("KAFKA_GROUP")
 	if group == "" {
@@ -101,6 +171,17 @@ func main() {
 	})
 	defer r.Close()
 
+	//THIS was given to me by grok I was having trouble figuring out WHERE and WHEN to have the Listen and serve set up
+	go func() {
+		http.Handle("/metrics", PromHttp.HandlerFor(register, PromHttp.HandlerOpts{
+			Registry: register,
+		}))
+		log.Println("Metrics server listening on :2112")
+		if err := http.ListenAndServe(":2112", nil); err != nil {
+			log.Fatalf("HTTP server failed: %v", err)
+		}
+	}()
+
 	log.Println("email-service consuming:", "offers", "from:", broker)
 
 	for {
@@ -113,20 +194,25 @@ func main() {
 		var n Notification
 		if err := json.Unmarshal(m.Value, &n); err != nil {
 			log.Println("bad json:", err, "value:", string(m.Value))
+			ef.FailedEmails.With(ProMetrics.Labels{"subject": n.Subject, "type": n.EventType}).Inc()
 			continue
 		}
 
 		if n.To == "" || n.Subject == "" {
 			log.Println("missing fields:", string(m.Value))
+			ef.FailedEmails.With(ProMetrics.Labels{"subject": n.Subject, "type": n.EventType}).Inc()
 			continue
 		}
 
 		if err := sendSMTP(n); err != nil {
 			log.Println("smtp send failed:", err, "to:", n.To)
+			ef.FailedEmails.With(ProMetrics.Labels{"subject": n.Subject, "type": n.EventType}).Inc()
 			continue
 		}
-
 		log.Println("email sent:", n.To, "event:", n.EventType)
+		es.SuccessfulEmails.With(ProMetrics.Labels{"subject": n.Subject, "type": n.EventType}).Inc()
+		et.TotalEmails.Inc()
+
 	}
 
 }
