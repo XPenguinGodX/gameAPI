@@ -100,18 +100,21 @@ func offersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func listOffers(w http.ResponseWriter, r *http.Request) {
-	userStr := r.URL.Query().Get("userId")
+	// 1. Get the TRUSTED ID from the Nginx header
+	userStr := r.Header.Get("X-User-ID")
 	if userStr == "" {
-		writeError(w, http.StatusBadRequest, "userId is required")
+		writeError(w, http.StatusUnauthorized, "Identity missing")
 		return
 	}
 
+	// Convert to int - this is now our source of truth
 	userID, err := strconv.Atoi(userStr)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "userId is invalid must be a number")
+		writeError(w, http.StatusBadRequest, "Invalid User ID format")
 		return
 	}
 
+	// 2. Parse query filters (status and type)
 	kind := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
 	status := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
 
@@ -122,9 +125,11 @@ func listOffers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 3. Fetch data based on the TRUSTED userID
 	if kind == "outgoing" {
 		offers, err = data.GetOutgoingTradeOffers(userID)
 	} else {
+		// Defaults to incoming if type is not "outgoing"
 		offers, err = data.GetIncomingTradeOffers(userID)
 	}
 
@@ -133,8 +138,8 @@ func listOffers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 4. Apply status filtering
 	if status != "" {
-		// FIX 3: make() requires a slice type []data.TradeOffer
 		filtered := make([]data.TradeOffer, 0, len(offers))
 		for _, o := range offers {
 			if strings.ToLower(o.CurrentStatus) == status {
@@ -144,15 +149,30 @@ func listOffers(w http.ResponseWriter, r *http.Request) {
 		offers = filtered
 	}
 
+	// 5. Build HATEOAS response
 	resp := make([]any, 0, len(offers))
 	for _, o := range offers {
 		resp = append(resp, tradeHATEOAS(o))
 	}
+
 	writeJSON(w, http.StatusOK, resp)
 	gr.GetRequests.With(prometheus.Labels{"where": "GET offers user has"}).Inc()
 }
 
 func offerByIDHandler(w http.ResponseWriter, r *http.Request) {
+	// 1. Get the TRUSTED ID from the Nginx header
+	userStr := r.Header.Get("X-User-ID")
+	if userStr == "" {
+		writeError(w, http.StatusUnauthorized, "Identity missing")
+		return
+	}
+
+	userID, err := strconv.Atoi(userStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid User ID format")
+		return
+	}
+
 	id, err := parseOfferID(r.URL.Path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid Offer ID")
@@ -161,15 +181,18 @@ func offerByIDHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		getOfferByID(w, r, id)
+		// Pass the userID to verify the person is part of this trade
+		getOfferByID(w, r, id, userID)
 	case http.MethodPatch:
-		patchOffer(w, r, id)
+		// Pass the userID to verify only the recipient can accept/reject
+		patchOffer(w, r, id, userID)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 	}
 }
 
-func getOfferByID(w http.ResponseWriter, r *http.Request, id int) {
+func getOfferByID(w http.ResponseWriter, r *http.Request, id int, userID int) {
+	// 1. Fetch the offer from the database
 	offer, err := data.GetTradeOfferByID(id)
 	if err != nil {
 		if err.Error() == "trade offer not found in database" {
@@ -180,19 +203,28 @@ func getOfferByID(w http.ResponseWriter, r *http.Request, id int) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// 2. SECURE AUTHORIZATION CHECK
+	// Only allow the person who made the offer or the person who received it to see it.
+	if offer.RequesterID != userID && offer.OwnerUserID != userID {
+		writeError(w, http.StatusForbidden, "You are not authorized to view this trade")
+		return
+	}
+
+	// 3. Return the data if the check passes
 	writeJSON(w, http.StatusOK, tradeHATEOAS(offer))
 	gr.GetRequests.With(prometheus.Labels{"where": "GET offer by id"}).Inc()
 }
 
-func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
+func patchOffer(w http.ResponseWriter, r *http.Request, id int, userID int) {
 	var patch data.TradeOfferPatch
 	if err := readJSON(r, &patch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if patch.OwnerUserID == nil || patch.CurrentStatus == nil {
-		writeError(w, http.StatusBadRequest, "ownerUserId and currentStatus are required")
+	if patch.CurrentStatus == nil {
+		writeError(w, http.StatusBadRequest, "currentStatus is required")
 		return
 	}
 
@@ -213,15 +245,27 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 
+	// SECURE AUTHORIZATION CHECK
+	if newStatus == "accepted" || newStatus == "rejected" {
+		if userID != offer.OwnerUserID {
+			writeError(w, http.StatusForbidden, "Only the recipient can respond to this offer")
+			return
+		}
+	} else if newStatus == "cancelled" {
+		if userID != offer.RequesterID {
+			writeError(w, http.StatusForbidden, "Only the requester can cancel this offer")
+			return
+		}
+	}
+
 	if offer.CurrentStatus != "pending" {
 		writeError(w, http.StatusConflict, "Offer is not pending")
 		return
 	}
 
-	if *patch.OwnerUserID != offer.OwnerUserID {
-		writeError(w, http.StatusForbidden, "Only the owner can respond to this offer")
-		return
-	}
+	// Fetch emails now so we can use them in both branches below
+	ownerEmail := data.GetEmailWithID(offer.OwnerUserID)
+	requesterEmail := data.GetEmailWithID(offer.RequesterID)
 
 	if newStatus == "accepted" {
 		if err := data.AcceptTradeOffer(id); err != nil {
@@ -229,33 +273,22 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 			return
 		}
 
-		ownerEmail := data.GetEmailWithID(offer.OwnerUserID)
-		requesterEmail := data.GetEmailWithID(offer.RequesterID)
-
-		if ownerEmail == "" {
-			log.Println("missing email for owner userID:", offer.OwnerUserID)
-		} else {
-			if err := kafka.PushNotification(kafka.Notification{
+		// Send Notifications for Acceptance
+		if ownerEmail != "" {
+			_ = kafka.PushNotification(kafka.Notification{
 				To:        ownerEmail,
 				Subject:   "Game Offer Accepted",
-				Body:      "Your game offer has been accepted.",
+				Body:      "You have accepted a trade offer!",
 				EventType: "offers",
-			}); err != nil {
-				log.Println("kafka push FAILED (owner accepted):", err)
-			}
+			})
 		}
-
-		if requesterEmail == "" {
-			log.Println("missing email for requester userID:", offer.RequesterID)
-		} else {
-			if err := kafka.PushNotification(kafka.Notification{
+		if requesterEmail != "" {
+			_ = kafka.PushNotification(kafka.Notification{
 				To:        requesterEmail,
 				Subject:   "Game Offer Accepted",
-				Body:      "Your game offer has been accepted.",
+				Body:      "Your game offer has been accepted!",
 				EventType: "offers",
-			}); err != nil {
-				log.Println("kafka push FAILED (requester accepted):", err)
-			}
+			})
 		}
 
 		w.WriteHeader(http.StatusNoContent)
@@ -265,42 +298,29 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 	if err := data.UpdateTradeOfferStatus(id, newStatus); err != nil {
 		if err.Error() == "trade offer not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
-			er.error404.With(prometheus.Labels{"where": "update trade status offers by id"})
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	if newStatus == "rejected" {
-		ownerEmail := data.GetEmailWithID(offer.OwnerUserID)
-		requesterEmail := data.GetEmailWithID(offer.RequesterID)
-
-		if ownerEmail == "" {
-			log.Println("missing email for owner userID:", offer.OwnerUserID)
-		} else {
-			if err := kafka.PushNotification(kafka.Notification{
-				To:        ownerEmail,
-				Subject:   "Game Offer Rejected",
-				Body:      "A game offer was rejected.",
-				EventType: "offers",
-			}); err != nil {
-				log.Println("kafka push FAILED (owner rejected):", err)
-			}
-		}
-
-		if requesterEmail == "" {
-			log.Println("missing email for requester userID:", offer.RequesterID)
-		} else {
-			if err := kafka.PushNotification(kafka.Notification{
-				To:        requesterEmail,
-				Subject:   "Game Offer Rejected",
-				Body:      "Your game offer was rejected.",
-				EventType: "offers",
-			}); err != nil {
-				log.Println("kafka push FAILED (requester rejected):", err)
-			}
-		}
+	// Send Notifications for Rejection/Cancellation
+	subject := "Game Offer " + strings.Title(newStatus)
+	if ownerEmail != "" {
+		_ = kafka.PushNotification(kafka.Notification{
+			To:        ownerEmail,
+			Subject:   subject,
+			Body:      "A trade offer has been " + newStatus + ".",
+			EventType: "offers",
+		})
+	}
+	if requesterEmail != "" {
+		_ = kafka.PushNotification(kafka.Notification{
+			To:        requesterEmail,
+			Subject:   subject,
+			Body:      "A trade offer has been " + newStatus + ".",
+			EventType: "offers",
+		})
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -308,13 +328,29 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 
 func createOffer(w http.ResponseWriter, r *http.Request) {
 	var offer data.TradeOfferCreateRequest
+
+	// 1. Get the TRUSTED ID from the Nginx header
+	userStr := r.Header.Get("X-User-ID")
+	if userStr == "" {
+		writeError(w, http.StatusUnauthorized, "Identity missing")
+		return
+	}
+
+	// Convert to int - this is now our source of truth for who is making the request
+	requesterID, err := strconv.Atoi(userStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid User ID format")
+		return
+	}
+
 	if err := readJSON(r, &offer); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid Offer Data"+err.Error())
 		return
 	}
 
-	if offer.RequesterID <= 0 || offer.GameRequestedID <= 0 || offer.GameOfferedID <= 0 {
-		writeError(w, http.StatusBadRequest, "MISSING IDS")
+	// 2. Validation (Check only game IDs; we ignore offer.RequesterID from JSON)
+	if offer.GameRequestedID <= 0 || offer.GameOfferedID <= 0 {
+		writeError(w, http.StatusBadRequest, "MISSING GAME IDS")
 		return
 	}
 	if offer.GameRequestedID == offer.GameOfferedID {
@@ -322,41 +358,45 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 3. Fetch requested game to find the target owner
 	requestedGame, err := data.GetOwnedGameBYID(offer.GameRequestedID)
 	if err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, "Game not found in database")
-			er.error404.With(prometheus.Labels{"where": "GetOwnedGameByID GAMErequest NOT FOUND"})
+			er.error404.With(prometheus.Labels{"where": "GetOwnedGameByID GAMErequest NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	// 4. Fetch offered game to verify ownership
 	offeredGame, err := data.GetOwnedGameBYID(offer.GameOfferedID)
 	if err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, "Game not found in database")
-			er.error404.With(prometheus.Labels{"where": "GetOwnedGameByID GAMEoffered NOT FOUND"})
-
+			er.error404.With(prometheus.Labels{"where": "GetOwnedGameByID GAMEoffered NOT FOUND"}).Inc()
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	if offeredGame.OwnerUserID != offer.RequesterID {
-		writeError(w, http.StatusBadRequest, "You can only offer your own games")
+	// 5. SECURE OWNERSHIP CHECK
+	// Verify the game being offered actually belongs to the person logged in
+	if offeredGame.OwnerUserID != requesterID {
+		writeError(w, http.StatusForbidden, "You can only offer your own games")
 		return
 	}
 
-	if requestedGame.OwnerUserID == offer.RequesterID {
+	// Prevent trading with yourself
+	if requestedGame.OwnerUserID == requesterID {
 		writeError(w, http.StatusBadRequest, "This is your own game")
 		return
 	}
 
 	trade := data.TradeOffer{
-		RequesterID:     offer.RequesterID,
+		RequesterID:     requesterID, // Use TRUSTED ID
 		OwnerUserID:     requestedGame.OwnerUserID,
 		GameRequestedID: offer.GameRequestedID,
 		GameOfferedID:   offer.GameOfferedID,
@@ -369,42 +409,34 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Use requesterID for the notification email lookups
 	gameOwnerEmail := data.GetEmailWithID(requestedGame.OwnerUserID)
-	requestMakerEmail := data.GetEmailWithID(offer.RequesterID)
+	requestMakerEmail := data.GetEmailWithID(requesterID)
 
-	if gameOwnerEmail == "" {
-		log.Println("missing email for game owner userID:", requestedGame.OwnerUserID)
-	} else {
-		err := kafka.PushNotification(kafka.Notification{
+	// ... (rest of notification logic using requesterID) ...
+
+	if gameOwnerEmail != "" {
+		_ = kafka.PushNotification(kafka.Notification{
 			To:        gameOwnerEmail,
 			Subject:   "Game Offer Created",
 			Body:      "An offer has been made for your game",
 			EventType: "offers",
 		})
-		if err != nil {
-			log.Println("kafka push FAILED (owner):", err)
-		}
 	}
 
-	if requestMakerEmail == "" {
-		log.Println("missing email for requester userID:", offer.RequesterID)
-	} else {
-		err := kafka.PushNotification(kafka.Notification{
+	if requestMakerEmail != "" {
+		_ = kafka.PushNotification(kafka.Notification{
 			To:        requestMakerEmail,
 			Subject:   "Game Offer Created",
 			Body:      "You have made a game offer",
 			EventType: "offers",
 		})
-		if err != nil {
-			log.Println("kafka push FAILED (requester):", err)
-		}
 	}
 
 	trade.OfferID = tradeID
 	writeJSON(w, http.StatusCreated, tradeHATEOAS(trade))
 	pc := postRequests(register)
 	pc.PostRequests.With(prometheus.Labels{"where": "Create Offer"}).Inc()
-
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -482,12 +514,27 @@ func gamePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1. Get the TRUSTED ID from the Nginx header
+	userStr := r.Header.Get("X-User-ID")
+	if userStr == "" {
+		writeError(w, http.StatusUnauthorized, "Identity missing")
+		return
+	}
+
+	// Convert the header string to an int
+	userID, err := strconv.Atoi(userStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Invalid User ID format")
+		return
+	}
+
 	if err := readJSON(r, &gameRequest); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if gameRequest.OwnerUserID <= 0 || gameRequest.Title == "" || gameRequest.Publisher == "" ||
+	// 2. Validate fields (we no longer check gameRequest.OwnerUserID because we use our trusted userID)
+	if gameRequest.Title == "" || gameRequest.Publisher == "" ||
 		gameRequest.Description == "" || gameRequest.Year <= 0 || gameRequest.Condition == "" {
 		writeError(w, http.StatusBadRequest, "MISSING REQUIRED FIELDS")
 		return
@@ -501,14 +548,16 @@ func gamePost(w http.ResponseWriter, r *http.Request) {
 		Condition:   gameRequest.Condition,
 	}
 
-	newGameID, err := data.CreateGame(game, gameRequest.OwnerUserID)
+	// 3. Create the game using the TRUSTED userID from the header
+	newGameID, err := data.CreateGame(game, userID)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	game.ID = newGameID
 	writeJSON(w, http.StatusCreated, gameHATEOAS(game))
+
 	gp := postRequests(register)
 	gp.PostRequests.With(prometheus.Labels{"where": "Create game"}).Inc()
 }

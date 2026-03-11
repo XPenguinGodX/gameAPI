@@ -27,7 +27,7 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/login", loginHandler)
+	mux.HandleFunc("/users/login", loginHandler)
 
 	mux.HandleFunc("/validate", validateHandler)
 
