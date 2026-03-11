@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"gameAPI/data"
 	"gameAPI/kafka"
 	"log"
 	"net/http"
@@ -23,94 +24,6 @@ type getCount struct {
 
 type NotFoundCount struct {
 	error404 *prometheus.CounterVec
-}
-
-type Game struct {
-	Title       string `json:"title"`
-	Publisher   string `json:"publisher"`
-	Description string `json:"description"`
-	Year        int    `json:"year"`
-	Condition   string `json:"condition"`
-	ID          int    `json:"id"`
-}
-
-type GamePatch struct {
-	Title       *string `json:"title"`
-	Description *string `json:"description"`
-	Condition   *string `json:"condition"`
-}
-
-type OwnedGame struct {
-	OwnerUserID int    `json:"ownerUserId"`
-	ID          int    `json:"id"`
-	Title       string `json:"title"`
-	Publisher   string `json:"publisher"`
-	Description string `json:"description"`
-	Year        int    `json:"year"`
-	Condition   string `json:"condition"`
-}
-
-type GameCreateRequest struct {
-	OwnerUserID int    `json:"ownerUserId"`
-	Title       string `json:"title"`
-	Publisher   string `json:"publisher"`
-	Description string `json:"description"`
-	Year        int    `json:"year"`
-	Condition   string `json:"condition"`
-}
-
-type User struct {
-	Username      string `json:"username"`
-	Password      string `json:"password"`
-	Email         string `json:"email"`
-	StreetAddress string `json:"streetAddress"`
-	ID            int    `json:"id"`
-}
-
-type NewUserRequest struct {
-	Username      string `json:"username"`
-	Password      string `json:"password"`
-	Email         string `json:"email"`
-	StreetAddress string `json:"streetAddress"`
-}
-
-type UserPutRequest struct {
-	Username      string `json:"username"`
-	StreetAddress string `json:"streetAddress"`
-}
-
-type GamePutRequest struct {
-	Title       string `json:"title"`
-	Publisher   string `json:"publisher"`
-	Description string `json:"description"`
-	Year        int    `json:"year"`
-	Condition   string `json:"condition"`
-}
-
-type UserPatch struct {
-	Username      *string `json:"username"`
-	StreetAddress *string `json:"streetAddress"`
-	Password      *string `json:"password"`
-}
-
-type TradeOffer struct {
-	OfferID         int    `json:"offerId"`
-	RequesterID     int    `json:"requesterId"`
-	OwnerUserID     int    `json:"ownerUserId"`
-	GameRequestedID int    `json:"gameRequestedId"`
-	GameOfferedID   int    `json:"gameOfferedId"`
-	CurrentStatus   string `json:"currentStatus"`
-}
-
-type TradeOfferCreateRequest struct {
-	RequesterID     int `json:"requesterId"`
-	GameRequestedID int `json:"gameRequestedId"`
-	GameOfferedID   int `json:"gameOfferedId"`
-}
-
-type TradeOfferPatch struct {
-	OwnerUserID   *int    `json:"ownerUserId"`
-	CurrentStatus *string `json:"currentStatus"`
 }
 
 type Link struct {
@@ -142,12 +55,12 @@ func setStartingMetrics() {
 func main() {
 	kafka.StartupKafkaProducer()
 	setStartingMetrics()
-	if err := ConnectDatabase(); err != nil {
+	if err := data.ConnectDatabase(); err != nil {
 		panic(err)
 	}
 
 	var one int
-	err := db.QueryRow("SELECT 1").Scan(&one)
+	err := data.Db.QueryRow("SELECT 1").Scan(&one)
 	if err != nil {
 		panic(err)
 	}
@@ -201,16 +114,18 @@ func listOffers(w http.ResponseWriter, r *http.Request) {
 
 	kind := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
 	status := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("status")))
-	var offers []TradeOffer
+
+	var offers []data.TradeOffer
+
 	if status != "" && status != "pending" && status != "accepted" && status != "rejected" && status != "cancelled" {
 		writeError(w, http.StatusBadRequest, "Invalid status")
 		return
 	}
 
 	if kind == "outgoing" {
-		offers, err = GetOutgoingTradeOffers(userID)
+		offers, err = data.GetOutgoingTradeOffers(userID)
 	} else {
-		offers, err = GetIncomingTradeOffers(userID)
+		offers, err = data.GetIncomingTradeOffers(userID)
 	}
 
 	if err != nil {
@@ -219,7 +134,8 @@ func listOffers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if status != "" {
-		filtered := make([]TradeOffer, 0, len(offers))
+		// FIX 3: make() requires a slice type []data.TradeOffer
+		filtered := make([]data.TradeOffer, 0, len(offers))
 		for _, o := range offers {
 			if strings.ToLower(o.CurrentStatus) == status {
 				filtered = append(filtered, o)
@@ -233,7 +149,7 @@ func listOffers(w http.ResponseWriter, r *http.Request) {
 		resp = append(resp, tradeHATEOAS(o))
 	}
 	writeJSON(w, http.StatusOK, resp)
-	gr.GetRequests.With(prometheus.Labels{"where": "GET offers user has"})
+	gr.GetRequests.With(prometheus.Labels{"where": "GET offers user has"}).Inc()
 }
 
 func offerByIDHandler(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +170,7 @@ func offerByIDHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getOfferByID(w http.ResponseWriter, r *http.Request, id int) {
-	offer, err := GetTradeOfferByID(id)
+	offer, err := data.GetTradeOfferByID(id)
 	if err != nil {
 		if err.Error() == "trade offer not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -269,7 +185,7 @@ func getOfferByID(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
-	var patch TradeOfferPatch
+	var patch data.TradeOfferPatch
 	if err := readJSON(r, &patch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -286,7 +202,7 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 
-	offer, err := GetTradeOfferByID(id)
+	offer, err := data.GetTradeOfferByID(id)
 	if err != nil {
 		if err.Error() == "trade offer not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -308,13 +224,13 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 	}
 
 	if newStatus == "accepted" {
-		if err := AcceptTradeOffer(id); err != nil {
+		if err := data.AcceptTradeOffer(id); err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
 
-		ownerEmail := GetEmailWithID(offer.OwnerUserID)
-		requesterEmail := GetEmailWithID(offer.RequesterID)
+		ownerEmail := data.GetEmailWithID(offer.OwnerUserID)
+		requesterEmail := data.GetEmailWithID(offer.RequesterID)
 
 		if ownerEmail == "" {
 			log.Println("missing email for owner userID:", offer.OwnerUserID)
@@ -346,7 +262,7 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 
-	if err := UpdateTradeOfferStatus(id, newStatus); err != nil {
+	if err := data.UpdateTradeOfferStatus(id, newStatus); err != nil {
 		if err.Error() == "trade offer not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
 			er.error404.With(prometheus.Labels{"where": "update trade status offers by id"})
@@ -357,8 +273,8 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 	}
 
 	if newStatus == "rejected" {
-		ownerEmail := GetEmailWithID(offer.OwnerUserID)
-		requesterEmail := GetEmailWithID(offer.RequesterID)
+		ownerEmail := data.GetEmailWithID(offer.OwnerUserID)
+		requesterEmail := data.GetEmailWithID(offer.RequesterID)
 
 		if ownerEmail == "" {
 			log.Println("missing email for owner userID:", offer.OwnerUserID)
@@ -391,7 +307,7 @@ func patchOffer(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func createOffer(w http.ResponseWriter, r *http.Request) {
-	var offer TradeOfferCreateRequest
+	var offer data.TradeOfferCreateRequest
 	if err := readJSON(r, &offer); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid Offer Data"+err.Error())
 		return
@@ -406,7 +322,7 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestedGame, err := GetOwnedGameBYID(offer.GameRequestedID)
+	requestedGame, err := data.GetOwnedGameBYID(offer.GameRequestedID)
 	if err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, "Game not found in database")
@@ -417,7 +333,7 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	offeredGame, err := GetOwnedGameBYID(offer.GameOfferedID)
+	offeredGame, err := data.GetOwnedGameBYID(offer.GameOfferedID)
 	if err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, "Game not found in database")
@@ -439,7 +355,7 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	trade := TradeOffer{
+	trade := data.TradeOffer{
 		RequesterID:     offer.RequesterID,
 		OwnerUserID:     requestedGame.OwnerUserID,
 		GameRequestedID: offer.GameRequestedID,
@@ -447,14 +363,14 @@ func createOffer(w http.ResponseWriter, r *http.Request) {
 		CurrentStatus:   "pending",
 	}
 
-	tradeID, err := CreateTradeOffer(trade)
+	tradeID, err := data.CreateTradeOffer(trade)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	gameOwnerEmail := GetEmailWithID(requestedGame.OwnerUserID)
-	requestMakerEmail := GetEmailWithID(offer.RequesterID)
+	gameOwnerEmail := data.GetEmailWithID(requestedGame.OwnerUserID)
+	requestMakerEmail := data.GetEmailWithID(offer.RequesterID)
 
 	if gameOwnerEmail == "" {
 		log.Println("missing email for game owner userID:", requestedGame.OwnerUserID)
@@ -519,7 +435,7 @@ func userHATEOAS(userID int, username, email, streetAddress string) map[string]a
 	}
 }
 
-func gameHATEOAS(game Game) map[string]any {
+func gameHATEOAS(game data.Game) map[string]any {
 	return map[string]any{
 		"id":          game.ID,
 		"title":       game.Title,
@@ -536,7 +452,7 @@ func gameHATEOAS(game Game) map[string]any {
 	}
 }
 
-func tradeHATEOAS(o TradeOffer) map[string]any {
+func tradeHATEOAS(o data.TradeOffer) map[string]any {
 	return map[string]any{
 		"offerId":         o.OfferID,
 		"requesterId":     o.RequesterID,
@@ -559,7 +475,7 @@ func readJSON(r *http.Request, dst any) error {
 }
 
 func gamePost(w http.ResponseWriter, r *http.Request) {
-	var gameRequest GameCreateRequest
+	var gameRequest data.GameCreateRequest
 
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Its gotta be a Post method")
@@ -577,7 +493,7 @@ func gamePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	game := Game{
+	game := data.Game{
 		Title:       gameRequest.Title,
 		Publisher:   gameRequest.Publisher,
 		Description: gameRequest.Description,
@@ -585,7 +501,7 @@ func gamePost(w http.ResponseWriter, r *http.Request) {
 		Condition:   gameRequest.Condition,
 	}
 
-	newGameID, err := CreateGame(game, gameRequest.OwnerUserID)
+	newGameID, err := data.CreateGame(game, gameRequest.OwnerUserID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -598,7 +514,7 @@ func gamePost(w http.ResponseWriter, r *http.Request) {
 }
 
 func userPost(w http.ResponseWriter, r *http.Request) {
-	var userRequest NewUserRequest
+	var userRequest data.NewUserRequest
 
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "Its gotta be a Post method")
@@ -616,14 +532,14 @@ func userPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user := User{
+	user := data.User{
 		Username:      userRequest.Username,
 		Password:      userRequest.Password,
 		Email:         userRequest.Email,
 		StreetAddress: userRequest.StreetAddress,
 	}
 
-	newUserId, err := CreateUser(user)
+	newUserId, err := data.CreateUser(user)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -637,7 +553,7 @@ func userPost(w http.ResponseWriter, r *http.Request) {
 }
 
 func userGetByID(w http.ResponseWriter, r *http.Request, id int) {
-	user, err := GetUser(id)
+	user, err := data.GetUser(id)
 	if err != nil {
 		if err.Error() == "user not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -655,7 +571,7 @@ func userGetByID(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func gameGetByID(w http.ResponseWriter, r *http.Request, id int) {
-	game, err := GetGameBYID(id)
+	game, err := data.GetGameBYID(id)
 	if err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -699,7 +615,7 @@ func gameHandler(w http.ResponseWriter, r *http.Request) {
 		excludeOwner := r.URL.Query().Get("excludeOwnerId")
 
 		if title != "" {
-			game, err := GetGameBYName(title)
+			game, err := data.GetGameBYName(title)
 			if err != nil {
 				if err.Error() == "game not found in database" {
 					writeError(w, http.StatusNotFound, err.Error())
@@ -717,8 +633,8 @@ func gameHandler(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			var games []Game
-			games, err = GetGamesNotOwnedByID(id)
+			var games []data.Game
+			games, err = data.GetGamesNotOwnedByID(id)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
@@ -764,7 +680,7 @@ func gameByIDHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func gamePut(w http.ResponseWriter, r *http.Request, id int) {
-	var game GamePutRequest
+	var game data.GamePutRequest
 	if err := readJSON(r, &game); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -775,7 +691,7 @@ func gamePut(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 
-	if err := UpdateFullGame(id, game); err != nil {
+	if err := data.UpdateFullGame(id, game); err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
 			ufg := Error404(register)
@@ -790,7 +706,7 @@ func gamePut(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func userPut(w http.ResponseWriter, r *http.Request, id int) {
-	var user UserPutRequest
+	var user data.UserPutRequest
 	if err := readJSON(r, &user); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -801,7 +717,7 @@ func userPut(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 
-	if err := UpdateUsername(id, user.Username); err != nil {
+	if err := data.UpdateUsername(id, user.Username); err != nil {
 		if err.Error() == "user not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
 			uu := Error404(register)
@@ -812,7 +728,7 @@ func userPut(w http.ResponseWriter, r *http.Request, id int) {
 		return
 	}
 
-	if err := UpdateStreetAddress(id, user.StreetAddress); err != nil {
+	if err := data.UpdateStreetAddress(id, user.StreetAddress); err != nil {
 		if err.Error() == "user not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
 			usa := Error404(register)
@@ -827,7 +743,7 @@ func userPut(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func userDelete(w http.ResponseWriter, r *http.Request, id int) {
-	err := DeleteUserByID(id)
+	err := data.DeleteUserByID(id)
 	if err != nil {
 		if err.Error() == "user not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -842,7 +758,7 @@ func userDelete(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func gameDelete(w http.ResponseWriter, r *http.Request, id int) {
-	err := DeleteGameByID(id)
+	err := data.DeleteGameByID(id)
 	if err != nil {
 		if err.Error() == "game not found in database" {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -857,7 +773,7 @@ func gameDelete(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func userPatch(w http.ResponseWriter, r *http.Request, id int) {
-	var Patch UserPatch
+	var Patch data.UserPatch
 	if err := readJSON(r, &Patch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -868,7 +784,7 @@ func userPatch(w http.ResponseWriter, r *http.Request, id int) {
 			writeError(w, http.StatusBadRequest, "Username is needed guy")
 			return
 		}
-		if err := UpdateUsername(id, *Patch.Username); err != nil {
+		if err := data.UpdateUsername(id, *Patch.Username); err != nil {
 			if err.Error() == "user not found in database" {
 				writeError(w, http.StatusNotFound, err.Error())
 				er.error404.With(prometheus.Labels{"where": "userPatch, USER NOT FOUND"}).Inc()
@@ -884,7 +800,7 @@ func userPatch(w http.ResponseWriter, r *http.Request, id int) {
 			writeError(w, http.StatusBadRequest, "Cant change to an address that hasnt been provided dude")
 			return
 		}
-		if err := UpdateStreetAddress(id, *Patch.StreetAddress); err != nil {
+		if err := data.UpdateStreetAddress(id, *Patch.StreetAddress); err != nil {
 			if err.Error() == "user not found in database" {
 				writeError(w, http.StatusNotFound, err.Error())
 				er.error404.With(prometheus.Labels{"where": "userPatch, USER NOT FOUND"}).Inc()
@@ -900,7 +816,7 @@ func userPatch(w http.ResponseWriter, r *http.Request, id int) {
 			writeError(w, http.StatusBadRequest, "Cant change to a password that hasnt been provided dude")
 			return
 		}
-		if err := UpdateUserPassword(id, *Patch.Password); err != nil {
+		if err := data.UpdateUserPassword(id, *Patch.Password); err != nil {
 			if err.Error() == "user not found in database (passwordCheck)" {
 				writeError(w, http.StatusNotFound, err.Error())
 				uu := Error404(register)
@@ -910,7 +826,7 @@ func userPatch(w http.ResponseWriter, r *http.Request, id int) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		var userEmail = GetEmailWithID(id)
+		var userEmail = data.GetEmailWithID(id)
 		if userEmail == "" {
 			log.Println("user email not found in database")
 		} else {
@@ -935,7 +851,7 @@ func userPatch(w http.ResponseWriter, r *http.Request, id int) {
 }
 
 func gamePatch(w http.ResponseWriter, r *http.Request, id int) {
-	var Patch GamePatch
+	var Patch data.GamePatch
 	if err := readJSON(r, &Patch); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -948,7 +864,7 @@ func gamePatch(w http.ResponseWriter, r *http.Request, id int) {
 			writeError(w, http.StatusBadRequest, "No title Provided")
 			return
 		}
-		if err := UpdateGameTitle(id, *Patch.Title); err != nil {
+		if err := data.UpdateGameTitle(id, *Patch.Title); err != nil {
 			if err.Error() == "game not found in database" {
 				writeError(w, http.StatusNotFound, err.Error())
 				uu := Error404(register)
@@ -966,7 +882,7 @@ func gamePatch(w http.ResponseWriter, r *http.Request, id int) {
 			writeError(w, http.StatusBadRequest, "No condition Provided")
 			return
 		}
-		if err := UpdateGameCondition(id, *Patch.Condition); err != nil {
+		if err := data.UpdateGameCondition(id, *Patch.Condition); err != nil {
 			if err.Error() == "game not found in database" {
 				writeError(w, http.StatusNotFound, err.Error())
 				ugp := Error404(register)
@@ -984,7 +900,7 @@ func gamePatch(w http.ResponseWriter, r *http.Request, id int) {
 			writeError(w, http.StatusBadRequest, "No description Provided")
 			return
 		}
-		if err := UpdateGameDescription(id, *Patch.Description); err != nil {
+		if err := data.UpdateGameDescription(id, *Patch.Description); err != nil {
 			if err.Error() == "game not found in database" {
 				writeError(w, http.StatusNotFound, err.Error())
 				ugd := Error404(register)

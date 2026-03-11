@@ -27,6 +27,7 @@ services:
       DB_HOST: db
       DATABASE: RetroGameDatabase
       API_HOST: 8080
+      JWT_SECRET: ${JWT_SECRET}
     depends_on:
       - db
     networks:
@@ -47,6 +48,7 @@ services:
       DB_HOST: db
       DATABASE: RetroGameDatabase
       API_HOST: 8080
+      JWT_SECRET: ${JWT_SECRET}
     depends_on:
       - db
     networks:
@@ -67,6 +69,25 @@ services:
       DB_HOST: db
       DATABASE: RetroGameDatabase
       API_HOST: 8080
+      JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      - db
+    networks:
+      - distributed-network
+
+  auth-api:
+    restart: always
+    container_name: auth-api
+    build:
+      context: .
+      dockerfile: auth/Dockerfile
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      SQL_ROOT: root
+      SQL_PASSWORD: penguin
+      SQL_PORT: 3306
+      DB_HOST: db
+      DATABASE: RetroGameDatabase
     depends_on:
       - db
     networks:
@@ -82,6 +103,7 @@ services:
       - api1
       - api2
       - api3
+      - auth-api
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     networks:

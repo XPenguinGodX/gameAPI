@@ -5,13 +5,9 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
+COPY . .
 
-
-COPY api/ ./api/
-COPY kafka/ ./kafka/
-
-WORKDIR /app/api
-RUN CGO_ENABLED=0 go build -o /app/server .
+RUN CGO_ENABLED=0 go build -o /app/server ./api/main.go
 
 EXPOSE 8080
 CMD ["/app/server"]

@@ -1,4 +1,4 @@
-package main
+package data
 
 import (
 	"database/sql"
@@ -6,11 +6,101 @@ import (
 	"log"
 	"os"
 
+	"golang.org/x/crypto/bcrypt"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
 )
 
-var db *sql.DB
+type Game struct {
+	Title       string `json:"title"`
+	Publisher   string `json:"publisher"`
+	Description string `json:"description"`
+	Year        int    `json:"year"`
+	Condition   string `json:"condition"`
+	ID          int    `json:"id"`
+}
+
+type GamePatch struct {
+	Title       *string `json:"title"`
+	Description *string `json:"description"`
+	Condition   *string `json:"condition"`
+}
+
+type OwnedGame struct {
+	OwnerUserID int    `json:"ownerUserId"`
+	ID          int    `json:"id"`
+	Title       string `json:"title"`
+	Publisher   string `json:"publisher"`
+	Description string `json:"description"`
+	Year        int    `json:"year"`
+	Condition   string `json:"condition"`
+}
+
+type GameCreateRequest struct {
+	OwnerUserID int    `json:"ownerUserId"`
+	Title       string `json:"title"`
+	Publisher   string `json:"publisher"`
+	Description string `json:"description"`
+	Year        int    `json:"year"`
+	Condition   string `json:"condition"`
+}
+
+type User struct {
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	Email         string `json:"email"`
+	StreetAddress string `json:"streetAddress"`
+	ID            int    `json:"id"`
+}
+
+type NewUserRequest struct {
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	Email         string `json:"email"`
+	StreetAddress string `json:"streetAddress"`
+}
+
+type UserPutRequest struct {
+	Username      string `json:"username"`
+	StreetAddress string `json:"streetAddress"`
+}
+
+type GamePutRequest struct {
+	Title       string `json:"title"`
+	Publisher   string `json:"publisher"`
+	Description string `json:"description"`
+	Year        int    `json:"year"`
+	Condition   string `json:"condition"`
+}
+
+type UserPatch struct {
+	Username      *string `json:"username"`
+	StreetAddress *string `json:"streetAddress"`
+	Password      *string `json:"password"`
+}
+
+type TradeOffer struct {
+	OfferID         int    `json:"offerId"`
+	RequesterID     int    `json:"requesterId"`
+	OwnerUserID     int    `json:"ownerUserId"`
+	GameRequestedID int    `json:"gameRequestedId"`
+	GameOfferedID   int    `json:"gameOfferedId"`
+	CurrentStatus   string `json:"currentStatus"`
+}
+
+type TradeOfferCreateRequest struct {
+	RequesterID     int `json:"requesterId"`
+	GameRequestedID int `json:"gameRequestedId"`
+	GameOfferedID   int `json:"gameOfferedId"`
+}
+
+type TradeOfferPatch struct {
+	OwnerUserID   *int    `json:"ownerUserId"`
+	CurrentStatus *string `json:"currentStatus"`
+}
+
+var Db *sql.DB
 
 func ConnectDatabase() error {
 	if err := godotenv.Load(); err != nil {
@@ -30,12 +120,12 @@ func ConnectDatabase() error {
 	fmt.Println(ConnectionRequirements)
 	var err error
 
-	db, err = sql.Open("mysql", ConnectionRequirements)
+	Db, err = sql.Open("mysql", ConnectionRequirements)
 	if err != nil {
 		return fmt.Errorf("database didnt connect: %w", err)
 	}
 
-	if err := db.Ping(); err != nil {
+	if err := Db.Ping(); err != nil {
 		return fmt.Errorf("connection test failed: %w", err)
 	}
 
@@ -47,7 +137,14 @@ func CreateUser(user User) (int, error) {
 	query := ` INSERT INTO USERS (Name, Email, PasswordHash, StreetAddress)
      VALUES (?, ?, ?, ?)`
 
-	result, err := db.Exec(query, user.Username, user.Email, user.Password, user.StreetAddress)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return 0, err
+	}
+
+	Stringed := string(hashed)
+
+	result, err := Db.Exec(query, user.Username, user.Email, Stringed, user.StreetAddress)
 	if err != nil {
 		return 0, fmt.Errorf("error inserting user: %w", err)
 	}
@@ -64,7 +161,7 @@ func CreateGame(game Game, userID int) (int, error) {
 	query := `INSERT INTO GAMES (OwnerUserID, Title, Publisher, Description, Year, Quality)
     VALUES (?, ?, ?, ?, ?, ?)`
 
-	result, err := db.Exec(query, userID, game.Title, game.Publisher, game.Description, game.Year, game.Condition)
+	result, err := Db.Exec(query, userID, game.Title, game.Publisher, game.Description, game.Year, game.Condition)
 	if err != nil {
 		return 0, fmt.Errorf("error inserting game: %w", err)
 	}
@@ -81,7 +178,7 @@ func GetUser(userID int) (User, error) {
 
 	query := ` SELECT UserID, Name, Email, PasswordHash, StreetAddress  FROM USERS WHERE UserID=?`
 
-	err := db.QueryRow(query, userID).Scan(&user.ID, &user.Username, &user.Email, &user.Password, &user.StreetAddress)
+	err := Db.QueryRow(query, userID).Scan(&user.ID, &user.Username, &user.Email, &user.Password, &user.StreetAddress)
 	if err == sql.ErrNoRows {
 		return User{}, fmt.Errorf("user not found in database")
 	}
@@ -97,7 +194,7 @@ func GetGameBYName(GameTitle string) (Game, error) {
 	var game Game
 	query := ` SELECT GameID, Title, Publisher, Description, Year, Quality FROM GAMES WHERE Title = ?`
 
-	err := db.QueryRow(query, GameTitle).Scan(&game.ID, &game.Title, &game.Publisher, &game.Description, &game.Year, &game.Condition)
+	err := Db.QueryRow(query, GameTitle).Scan(&game.ID, &game.Title, &game.Publisher, &game.Description, &game.Year, &game.Condition)
 	if err == sql.ErrNoRows {
 		return Game{}, fmt.Errorf("game not found in database")
 	}
@@ -113,7 +210,7 @@ func GetGameBYID(GameId int) (Game, error) {
 	var game Game
 	query := ` SELECT GameID, Title, Publisher, Description, Year, Quality FROM GAMES WHERE GameID=?`
 
-	err := db.QueryRow(query, GameId).Scan(&game.ID, &game.Title, &game.Publisher, &game.Description, &game.Year, &game.Condition)
+	err := Db.QueryRow(query, GameId).Scan(&game.ID, &game.Title, &game.Publisher, &game.Description, &game.Year, &game.Condition)
 	if err == sql.ErrNoRows {
 		return Game{}, fmt.Errorf("game not found in database")
 	}
@@ -127,7 +224,7 @@ func GetOwnedGameBYID(GameId int) (OwnedGame, error) {
 	var game OwnedGame
 	query := ` SELECT GameID, Title, Publisher, Description, Year, Quality,OwnerUserID FROM GAMES WHERE GameID=?`
 
-	err := db.QueryRow(query, GameId).Scan(&game.ID, &game.Title, &game.Publisher, &game.Description, &game.Year, &game.Condition, &game.OwnerUserID)
+	err := Db.QueryRow(query, GameId).Scan(&game.ID, &game.Title, &game.Publisher, &game.Description, &game.Year, &game.Condition, &game.OwnerUserID)
 	if err == sql.ErrNoRows {
 		return OwnedGame{}, fmt.Errorf("game not found in database")
 	}
@@ -141,7 +238,7 @@ func GetGamesNotOwnedByID(userID int) ([]Game, error) {
 	var games []Game
 	query := ` SELECT GameID, Title, Publisher, Description, Year, Quality FROM GAMES WHERE OwnerUserID <> ?`
 
-	rows, err := db.Query(query, userID)
+	rows, err := Db.Query(query, userID)
 
 	if err != nil {
 		return nil, fmt.Errorf("error getting games: %w", err)
@@ -163,7 +260,7 @@ func GetGamesNotOwnedByID(userID int) ([]Game, error) {
 
 func UpdateUsername(userId int, username string) error {
 	query := `UPDATE USERS SET Name=? WHERE UserID=?`
-	result, err := db.Exec(query, username, userId)
+	result, err := Db.Exec(query, username, userId)
 	if err != nil {
 		return fmt.Errorf("error updating username: %w", err)
 	}
@@ -176,7 +273,7 @@ func UpdateUsername(userId int, username string) error {
 
 func UpdateStreetAddress(userId int, streetAddress string) error {
 	query := `UPDATE USERS SET StreetAddress=? WHERE UserID=?`
-	result, err := db.Exec(query, streetAddress, userId)
+	result, err := Db.Exec(query, streetAddress, userId)
 	if err != nil {
 		return fmt.Errorf("error updating street address: %w", err)
 	}
@@ -190,7 +287,7 @@ func UpdateStreetAddress(userId int, streetAddress string) error {
 func UpdateFullGame(GameID int, game GamePutRequest) error {
 	query := `UPDATE GAMES SET Title = ?, Publisher = ?, Description = ?, Year = ?, Quality = ? WHERE GameID=?`
 
-	result, err := db.Exec(query, game.Title, game.Publisher, game.Description, game.Year, game.Condition, GameID)
+	result, err := Db.Exec(query, game.Title, game.Publisher, game.Description, game.Year, game.Condition, GameID)
 	if err != nil {
 		return fmt.Errorf("error updating full game: %w", err)
 	}
@@ -204,7 +301,7 @@ func UpdateFullGame(GameID int, game GamePutRequest) error {
 
 func UpdateGameTitle(GameID int, Title string) error {
 	query := `UPDATE GAMES SET Title = ? WHERE GameID=?`
-	result, err := db.Exec(query, Title, GameID)
+	result, err := Db.Exec(query, Title, GameID)
 	if err != nil {
 		return fmt.Errorf("error updating game title: %w", err)
 	}
@@ -217,7 +314,7 @@ func UpdateGameTitle(GameID int, Title string) error {
 
 func UpdateGameCondition(GameID int, Condition string) error {
 	query := `UPDATE GAMES SET Quality = ? WHERE GameID=?`
-	result, err := db.Exec(query, Condition, GameID)
+	result, err := Db.Exec(query, Condition, GameID)
 	if err != nil {
 		return fmt.Errorf("error updating game condition: %w", err)
 	}
@@ -230,7 +327,7 @@ func UpdateGameCondition(GameID int, Condition string) error {
 
 func UpdateGameDescription(GameID int, Description string) error {
 	query := `UPDATE GAMES SET Description = ? WHERE GameID=?`
-	result, err := db.Exec(query, Description, GameID)
+	result, err := Db.Exec(query, Description, GameID)
 	if err != nil {
 		return fmt.Errorf("error updating game description: %w", err)
 	}
@@ -243,7 +340,7 @@ func UpdateGameDescription(GameID int, Description string) error {
 
 func DeleteUserByID(userID int) error {
 	query := `DELETE FROM USERS WHERE UserID=?`
-	result, err := db.Exec(query, userID)
+	result, err := Db.Exec(query, userID)
 	if err != nil {
 		return fmt.Errorf("error deleting user: %w", err)
 	}
@@ -256,7 +353,7 @@ func DeleteUserByID(userID int) error {
 
 func DeleteUserByUsername(username string) error {
 	query := `DELETE FROM USERS WHERE Name=?`
-	result, err := db.Exec(query, username)
+	result, err := Db.Exec(query, username)
 	if err != nil {
 		return fmt.Errorf("error deleting user: %w", err)
 	}
@@ -269,7 +366,7 @@ func DeleteUserByUsername(username string) error {
 
 func DeleteGameByID(GameID int) error {
 	query := `DELETE FROM GAMES WHERE GameID=?`
-	result, err := db.Exec(query, GameID)
+	result, err := Db.Exec(query, GameID)
 	if err != nil {
 		return fmt.Errorf("error deleting game: %w", err)
 	}
@@ -282,7 +379,7 @@ func DeleteGameByID(GameID int) error {
 
 func DeleteGameByTitle(GameTitle string) error {
 	query := `DELETE FROM GAMES WHERE Title = ?`
-	result, err := db.Exec(query, GameTitle)
+	result, err := Db.Exec(query, GameTitle)
 	if err != nil {
 		return fmt.Errorf("error deleting game: %w", err)
 	}
@@ -295,7 +392,7 @@ func DeleteGameByTitle(GameTitle string) error {
 
 func CreateTradeOffer(offer TradeOffer) (int, error) {
 	query := `INSERT INTO TRADE(RequesterID, OwnerUserID,GameRequestedID,GameOfferedID,CurrentStatus) VALUES(?, ?, ?, ?, ?)`
-	result, err := db.Exec(query,
+	result, err := Db.Exec(query,
 		offer.RequesterID,
 		offer.OwnerUserID,
 		offer.GameRequestedID,
@@ -319,7 +416,7 @@ func GetTradeOfferByID(offerID int) (TradeOffer, error) {
 		FROM TRADE
 		WHERE OfferID = ?
 	`
-	err := db.QueryRow(query, offerID).Scan(
+	err := Db.QueryRow(query, offerID).Scan(
 		&o.OfferID,
 		&o.RequesterID,
 		&o.OwnerUserID,
@@ -344,7 +441,7 @@ func GetIncomingTradeOffers(ownerID int) ([]TradeOffer, error) {
 		WHERE OwnerUserID = ?
 		ORDER BY OfferID DESC
 	`
-	rows, err := db.Query(query, ownerID)
+	rows, err := Db.Query(query, ownerID)
 	if err != nil {
 		return nil, fmt.Errorf("error querying trade offers: %w", err)
 	}
@@ -372,7 +469,7 @@ func GetOutgoingTradeOffers(requesterID int) ([]TradeOffer, error) {
 		WHERE RequesterID = ?
 		ORDER BY OfferID DESC
 	`
-	rows, err := db.Query(query, requesterID)
+	rows, err := Db.Query(query, requesterID)
 	if err != nil {
 		return nil, fmt.Errorf("error querying trade offers: %w", err)
 	}
@@ -394,7 +491,7 @@ func GetOutgoingTradeOffers(requesterID int) ([]TradeOffer, error) {
 
 func UpdateTradeOfferStatus(offerID int, status string) error {
 	query := `UPDATE TRADE SET CurrentStatus=? WHERE OfferID=?`
-	result, err := db.Exec(query, status, offerID)
+	result, err := Db.Exec(query, status, offerID)
 	if err != nil {
 		return fmt.Errorf("error updating trade offer: %w", err)
 	}
@@ -410,7 +507,7 @@ func UpdateTradeOfferStatus(offerID int, status string) error {
 
 func UpdateUserPassword(userID int, password string) error {
 	query := `UPDATE USERS SET PasswordHash=? WHERE UserID=?`
-	result, err := db.Exec(query, password, userID)
+	result, err := Db.Exec(query, password, userID)
 	if err != nil {
 		return fmt.Errorf("error updating user password: %w", err)
 	}
@@ -427,7 +524,7 @@ func UpdateUserPassword(userID int, password string) error {
 func GetEmailWithID(id int) string {
 	var email string
 	query := `SELECT Email From USERS WHERE UserID=?`
-	result := db.QueryRow(query, id).Scan(&email)
+	result := Db.QueryRow(query, id).Scan(&email)
 	if result != nil {
 		return ""
 	}
@@ -435,7 +532,7 @@ func GetEmailWithID(id int) string {
 }
 
 func AcceptTradeOffer(offerID int) error {
-	tx, err := db.Begin()
+	tx, err := Db.Begin()
 	if err != nil {
 		return fmt.Errorf("error starting transaction: %w", err)
 	}
@@ -500,4 +597,20 @@ func AcceptTradeOffer(offerID int) error {
 	}
 
 	return nil
+}
+
+func VerifyUser(email string, password string) int {
+	var hashedPassword string
+	var id int
+	query := "SELECT UserID, PasswordHash FROM USERS WHERE Email=?"
+	result := Db.QueryRow(query, email).Scan(&id, &hashedPassword)
+	if result != nil {
+		return -1
+	}
+
+	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+	if err != nil {
+		return -1
+	}
+	return id
 }
